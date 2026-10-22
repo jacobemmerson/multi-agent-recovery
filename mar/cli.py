@@ -45,7 +45,9 @@ def _day1(args: argparse.Namespace) -> None:
 
 
 def _run(args: argparse.Namespace) -> None:
-    raise NotImplementedError("mar run arrives with the experiment runner")
+    from mar.run import run_experiment
+
+    run_experiment(args.config, args.tasks, args.runs_dir, args.resume)
 
 
 def _aggregate(args: argparse.Namespace) -> None:

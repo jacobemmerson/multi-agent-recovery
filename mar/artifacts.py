@@ -4,7 +4,7 @@ Every artifact records its producer, cited inputs, tool reads, and note reads. T
 what the orchestrator can see; ground-truth influence comes from counterfactual twins.
 """
 
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field
 
@@ -50,8 +50,11 @@ class ToolAction(BaseModel):
     result: str | None = None
 
 
+AnyArtifact = Annotated[Finding | PlanStep | ExecutedStep | NoteEntry, Field(discriminator="kind")]
+
+
 class ProvenanceGraph(BaseModel):
-    artifacts: dict[str, Artifact] = Field(default_factory=dict)
+    artifacts: dict[str, AnyArtifact] = Field(default_factory=dict)
     tool_actions: dict[str, ToolAction] = Field(default_factory=dict)
 
     def add(self, artifact: Artifact) -> None:

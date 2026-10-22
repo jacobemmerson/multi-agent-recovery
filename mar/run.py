@@ -8,6 +8,7 @@ runs/<run_id>/. fork_twin starts a counterfactual run from a pre-injection snaps
 import json
 import subprocess
 import time
+import zlib
 from collections.abc import Callable
 from datetime import datetime, timezone
 from dataclasses import dataclass, field
@@ -20,9 +21,9 @@ from agentdojo.functions_runtime import TaskEnvironment
 
 from mar.agents import Executor, Planner, Researcher, ToolResult, load_prompt, prompt_hashes, tool_loop
 from mar.artifacts import Artifact, Finding, PlanStep, ProvenanceGraph, ToolAction
-from mar.config import ExperimentConfig
+from mar.config import ExperimentConfig, TaskSet, load_experiment, load_task_set
 from mar.env import TOOL_ACTION_CLASSES, ActionClass, Env
-from mar.faults import templates_hash
+from mar.faults import FaultTemplate, load_templates, templates_hash
 from mar.llm import LLMClient, LLMResponse
 
 
@@ -278,10 +279,86 @@ def run_pipeline(
     return PipelineResult(output=output, utility=env.check_utility(output), llm_calls=recording.calls, plan_retries=plan_retries)
 
 
-def run_task(config: ExperimentConfig, condition: str, task_ids: list[str], fault_id: str | None, repeat: int, runs_dir: Path) -> RunRecord:
-    raise NotImplementedError
+@dataclass(frozen=True)
+class Job:
+    suite: str
+    task_id: str
+    condition: str
+    fault_id: str | None
+    repeat: int
+    twin: bool = False
+
+    @property
+    def run_id(self) -> str:
+        base = f"{self.suite}-{self.task_id}-{self.condition}-{self.fault_id or 'clean'}-r{self.repeat}"
+        return base + ("-twin" if self.twin else "")
+
+    @property
+    def seed(self) -> int:
+        return zlib.crc32(f"{self.task_id}:{self.repeat}".encode())
 
 
-def fork_twin(parent: RunRecord, branch_point: int, runs_dir: Path) -> RunRecord:
-    """Counterfactual run sharing every artifact before the injection point."""
-    raise NotImplementedError
+def expand_jobs(config: ExperimentConfig, tasks: TaskSet, templates: list[FaultTemplate]) -> list[Job]:
+    """Deterministic grid: per task and repeat, one clean job per condition."""
+    jobs = []
+    for suite, task_ids in sorted(tasks.suites.items()):
+        for task_id in task_ids:
+            for repeat in range(config.repeats):
+                for condition in config.conditions:
+                    jobs.append(Job(suite, task_id, condition, None, repeat))
+    return jobs
+
+
+def run_job(job: Job, config: ExperimentConfig, tasks: TaskSet, llm: LLMClient, runs_dir: Path, templates: list[FaultTemplate]) -> RunRecord:
+    env = Env(job.suite, job.task_id, tasks.benchmark_version)
+    manifest = build_manifest(
+        config, run_id=job.run_id, suite=job.suite, task_id=job.task_id, condition=job.condition,
+        fault_id=job.fault_id, repeat=job.repeat, seed=job.seed,
+    )
+    record = RunRecord.start(runs_dir, manifest)
+    started = time.perf_counter()
+    result = run_pipeline(env, llm, record, job.task_id)
+    actions = record.graph.tool_actions.values()
+    record.finish(
+        {
+            "utility": result.utility,
+            "llm_calls": result.llm_calls,
+            "plan_retries": result.plan_retries,
+            "tool_calls": len(record.graph.tool_actions),
+            "unauthorized_actions": sum(not a.authorized for a in actions),
+            "irreversible_actions": sum(a.action_class == ActionClass.IRREVERSIBLE.value for a in actions),
+            "seconds": round(time.perf_counter() - started, 1),
+            "fault_applied": None,
+            "ignored": None,
+        }
+    )
+    return record
+
+
+def run_experiment(
+    config_path: Path,
+    tasks: Literal["dev", "eval"],
+    runs_dir: Path,
+    resume: bool,
+    llm: LLMClient | None = None,
+) -> list[Path]:
+    config = load_experiment(config_path)
+    task_set = load_task_set(Path(config.tasks) if tasks == "dev" else Path("configs/eval_tasks.yaml"))
+    if task_set.benchmark_version != config.benchmark_version:
+        raise ValueError(f"benchmark version mismatch: tasks {task_set.benchmark_version}, config {config.benchmark_version}")
+    templates = load_templates(config.fault_templates)
+    jobs = expand_jobs(config, task_set, templates)
+    if llm is None:
+        from mar.llm import OpenAICompatibleClient
+
+        llm = OpenAICompatibleClient.from_config(config.model)
+    directories = []
+    for n, job in enumerate(jobs, 1):
+        directory = runs_dir / job.run_id
+        if resume and (directory / "result.json").exists():
+            print(f"[{n}/{len(jobs)}] {job.run_id} skipped (done)")
+        else:
+            record = run_job(job, config, task_set, llm, runs_dir, templates)
+            print(f"[{n}/{len(jobs)}] {job.run_id} utility={record.result['utility']} llm={record.result['llm_calls']} {record.result['seconds']}s")
+        directories.append(directory)
+    return directories

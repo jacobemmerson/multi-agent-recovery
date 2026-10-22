@@ -7,6 +7,8 @@ injection task). The oracle reveals fault identity Δ steps after injection.
 
 import hashlib
 import random
+
+import yaml
 from pathlib import Path
 from typing import Literal
 
@@ -33,7 +35,14 @@ class ScheduledFault(BaseModel):
 
 
 def load_templates(directory: Path) -> list[FaultTemplate]:
-    raise NotImplementedError
+    templates = sorted(
+        (FaultTemplate.model_validate(yaml.safe_load(path.read_text())) for path in directory.glob("*.yaml")),
+        key=lambda t: t.id,
+    )
+    ids = [t.id for t in templates]
+    if len(ids) != len(set(ids)):
+        raise ValueError(f"duplicate template ids in {directory}")
+    return templates
 
 
 def templates_hash(directory: Path) -> str:

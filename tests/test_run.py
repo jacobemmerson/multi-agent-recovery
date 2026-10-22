@@ -100,3 +100,46 @@ def test_run_round_trips_through_disk(tmp_path):
     assert "t:f0" in loaded.graph.artifacts and loaded.events[0]["kind"] == "artifact"
     assert loaded.graph.artifacts["t:f0"].kind == "finding"
     assert (tmp_path / "r1" / "artifacts" / "t:f0.json").exists()
+
+
+import yaml
+
+from mar.config import TaskSet
+from mar.run import Job, expand_jobs, run_experiment
+
+
+def test_expand_jobs_is_deterministic_and_resumable_ids():
+    tasks = TaskSet(suites={"workspace": ["user_task_0", "user_task_1"]})
+    config = cfg().model_copy(update={"repeats": 2, "conditions": ["none"]})
+    jobs = expand_jobs(config, tasks, templates=[])
+    assert len(jobs) == 4 and jobs == expand_jobs(config, tasks, templates=[])
+    assert jobs[0].run_id == "workspace-user_task_0-none-clean-r0"
+    assert Job("workspace", "t", "none", "x", 1, twin=True).run_id == "workspace-t-none-x-r1-twin"
+
+
+def test_run_experiment_skips_completed_runs(tmp_path, fake_llm_responses):
+    tasks_path = tmp_path / "tasks.yaml"
+    tasks_path.write_text(yaml.safe_dump({"benchmark_version": "v1.2", "suites": {"workspace": ["user_task_0"]}}))
+    config_path = tmp_path / "exp.yaml"
+    config_path.write_text(yaml.safe_dump({
+        "name": "smoke", "model": {"name": "fake"}, "tasks": str(tasks_path), "repeats": 1,
+        "conditions": ["none"], "fault_templates": str(tmp_path / "no_templates"),
+    }))
+    (tmp_path / "no_templates").mkdir()
+    done = tmp_path / "runs" / "workspace-user_task_0-none-clean-r0"
+    done.mkdir(parents=True)
+    (done / "result.json").write_text("{}")
+    llm = fake_llm_responses()
+    paths = run_experiment(config_path, "dev", tmp_path / "runs", resume=True, llm=llm)
+    assert llm.calls == [] and paths == [done]
+
+
+from mar.artifacts import PlanStep
+
+
+def test_loaded_artifacts_keep_their_subclass_fields(tmp_path):
+    record = RunRecord.start(tmp_path, {"run_id": "r2"})
+    record.add_artifact(PlanStep(id="t:p1", producer="planner", task_id="t", index=1, cites=["t:f0"]))
+    record.finish({})
+    loaded = load_run(tmp_path / "r2").graph.artifacts["t:p1"]
+    assert isinstance(loaded, PlanStep) and loaded.index == 1
