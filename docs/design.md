@@ -64,6 +64,8 @@ noise-floor clean runs are independent.
   is single-agent, so we use only suites, `TaskEnvironment`, `FunctionsRuntime`, and checkers. The
   executor's messages use AgentDojo `ChatMessage` types so its defense elements can be inserted for
   the built-in-defenses baseline.
+- **Messages are plain OpenAI dicts in Phase 1.** AgentDojo `ChatMessage` compatibility, needed only for
+  the Phase 2 built-in-defenses baseline, is deferred.
 - **AgentDojo tools carry no action class**, so `env.py` keeps a dict from tool name to class.
 - **TritonAI endpoint** (`BASE_URL`, `TRITONAI_API_KEY` in `.env`) was probed on 2026-10-21: native
   `tool_calls` and strict JSON-schema `response_format` both work on `api-glm-5.3-flash`. Models
