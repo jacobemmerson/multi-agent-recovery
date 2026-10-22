@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
-from mar.artifacts import Artifact, ExecutedStep
+from mar.artifacts import Artifact, ExecutedStep, Finding, PlanStep
 from mar.llm import LLMClient, LLMResponse
 
 PROMPTS_DIR = Path(__file__).parent / "prompts"
@@ -81,18 +81,112 @@ class Agent(Protocol):
     def run(self, inputs: dict[str, Any], llm: LLMClient, tools: ToolRuntime | None = None) -> list[Artifact]: ...
 
 
+FINDINGS_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "findings": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"source": {"type": "string"}, "content": {"type": "string"}},
+                "required": ["source", "content"],
+                "additionalProperties": False,
+            },
+        }
+    },
+    "required": ["findings"],
+    "additionalProperties": False,
+}
+
+PLAN_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "steps": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"instruction": {"type": "string"}, "cites": {"type": "array", "items": {"type": "string"}}},
+                "required": ["instruction", "cites"],
+                "additionalProperties": False,
+            },
+        }
+    },
+    "required": ["steps"],
+    "additionalProperties": False,
+}
+
+PLANNER_ATTEMPTS = 3
+
+
+class PlanRejected(Exception):
+    """The planner produced no plan with valid citations within PLANNER_ATTEMPTS."""
+
+
 class Researcher:
-    """One Finding per source (document, email, search result)."""
+    """One Finding per source (document, email, search result). Read-only tools only."""
 
     def run(self, inputs, llm, tools=None) -> list[Artifact]:
-        raise NotImplementedError
+        if tools is None:
+            raise ValueError("researcher needs a tool runtime")
+        loop = tool_loop(load_prompt("researcher"), inputs["prompt"], llm, tools)
+        messages = loop.messages + [
+            {"role": "user", "content": "List every fact you gathered as findings, one per source you consulted."}
+        ]
+        response = llm.complete(messages, schema=FINDINGS_SCHEMA)
+        task_id = inputs["task_id"]
+        return [
+            Finding(
+                id=f"{task_id}:f{i}",
+                producer="researcher",
+                task_id=task_id,
+                branch_id=inputs.get("branch_id", "main"),
+                source=item["source"],
+                tool_reads=loop.action_ids,
+                content={"text": item["content"]},
+            )
+            for i, item in enumerate(json.loads(response.content or "{}").get("findings", []))
+        ]
 
 
 class Planner:
-    """Numbered PlanSteps, each citing finding ids; enforced by JSON schema, retried on miss."""
+    """Numbered PlanSteps, each citing finding ids; schema-enforced, retried when citations are invalid."""
 
     def run(self, inputs, llm, tools=None) -> list[Artifact]:
-        raise NotImplementedError
+        findings: list[Finding] = inputs["findings"]
+        valid_ids = {f.id for f in findings}
+        listing = "\n".join(f"[{f.id}] ({f.source}) {f.content.get('text', '')}" for f in findings) or "(no findings)"
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": load_prompt("planner")},
+            {"role": "user", "content": f"Task: {inputs['prompt']}\n\nFindings:\n{listing}"},
+        ]
+        for attempt in range(PLANNER_ATTEMPTS):
+            response = llm.complete(messages, schema=PLAN_SCHEMA)
+            steps = json.loads(response.content or "{}").get("steps", [])
+            bad = [s for s in steps if not s["cites"] or not set(s["cites"]) <= valid_ids]
+            if steps and not bad:
+                task_id = inputs["task_id"]
+                return [
+                    PlanStep(
+                        id=f"{task_id}:p{i}",
+                        producer="planner",
+                        task_id=task_id,
+                        branch_id=inputs.get("branch_id", "main"),
+                        index=i,
+                        cites=step["cites"],
+                        content={"instruction": step["instruction"], "retries": attempt},
+                    )
+                    for i, step in enumerate(steps)
+                ]
+            messages.append({"role": "assistant", "content": response.content})
+            messages.append(
+                {
+                    "role": "user",
+                    "content": "Every step must cite at least one finding id, and only from this list: "
+                    + (", ".join(sorted(valid_ids)) or "(none)")
+                    + ". Rewrite the plan.",
+                }
+            )
+        raise PlanRejected(f"no valid plan after {PLANNER_ATTEMPTS} attempts")
 
 
 class Executor:

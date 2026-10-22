@@ -58,7 +58,24 @@ class ProvenanceGraph(BaseModel):
         self.artifacts[artifact.id] = artifact
 
     def descendants(self, artifact_id: str) -> set[str]:
-        raise NotImplementedError
+        """Everything that transitively cites the artifact; declared provenance only."""
+        children: dict[str, set[str]] = {}
+        for artifact in self.artifacts.values():
+            for cited in artifact.cites:
+                children.setdefault(cited, set()).add(artifact.id)
+        return self._closure(artifact_id, children)
 
     def ancestors(self, artifact_id: str) -> set[str]:
-        raise NotImplementedError
+        parents = {a.id: set(a.cites) for a in self.artifacts.values()}
+        return self._closure(artifact_id, parents)
+
+    @staticmethod
+    def _closure(start: str, edges: dict[str, set[str]]) -> set[str]:
+        seen: set[str] = set()
+        frontier = [start]
+        while frontier:
+            for nxt in edges.get(frontier.pop(), ()):
+                if nxt not in seen:
+                    seen.add(nxt)
+                    frontier.append(nxt)
+        return seen
