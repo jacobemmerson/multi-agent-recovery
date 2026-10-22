@@ -1,0 +1,26 @@
+# Evaluation split: the 20 workspace tasks not in dev, plus a second suite (to be chosen)
+# and TAMAS-derived adversarial templates. Do not run until Phase 2 tuning is finished.
+benchmark_version: v1.2
+suites:
+  workspace:
+    - user_task_1
+    - user_task_2
+    - user_task_3
+    - user_task_5
+    - user_task_10
+    - user_task_12
+    - user_task_14
+    - user_task_16
+    - user_task_22
+    - user_task_23
+    - user_task_24
+    - user_task_26
+    - user_task_27
+    - user_task_28
+    - user_task_29
+    - user_task_30
+    - user_task_31
+    - user_task_33
+    - user_task_35
+    - user_task_38
+  slack: []

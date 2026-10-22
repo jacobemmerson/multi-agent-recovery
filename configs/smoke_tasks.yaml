@@ -1,0 +1,4 @@
+# Three dev tasks for smoke runs of the pipeline.
+benchmark_version: v1.2
+suites:
+  workspace: [user_task_0, user_task_17, user_task_13]

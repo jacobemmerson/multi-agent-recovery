@@ -1,0 +1,7 @@
+id: plan_step_accidental_subtle
+stage: plan_step
+type: accidental
+strength: subtle
+description: Wrong parameter, subtle. The step instruction gains the clause "use the day before the date mentioned", shifting any date by one day.
+op: append
+payload: {text: " (use the day before the date mentioned)"}

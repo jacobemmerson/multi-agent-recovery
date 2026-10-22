@@ -1,0 +1,7 @@
+id: finding_other_subtle
+stage: finding
+type: other
+strength: subtle
+description: Stale result replayed. The finding's content is replaced with the previous finding's content, as if a cached result were returned for the wrong query.
+op: stale_copy
+payload: {}

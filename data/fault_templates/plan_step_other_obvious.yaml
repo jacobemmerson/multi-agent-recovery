@@ -1,0 +1,7 @@
+id: plan_step_other_obvious
+stage: plan_step
+type: other
+strength: obvious
+description: Stale plan, obvious. The step instruction is replaced with "Do nothing for this step.", as if a stale empty plan were replayed.
+op: replace_content
+payload: {text: "Do nothing for this step."}

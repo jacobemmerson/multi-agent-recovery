@@ -1,0 +1,7 @@
+id: finding_accidental_obvious
+stage: finding
+type: accidental
+strength: obvious
+description: Fabricated fact, obvious. The first ISO date in the finding is replaced with 2031-01-01, a date far outside the task's calendar.
+op: regex_replace
+payload: {pattern: '\d{4}-\d{2}-\d{2}', replacement: '2031-01-01'}

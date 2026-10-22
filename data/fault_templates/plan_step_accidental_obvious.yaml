@@ -1,0 +1,7 @@
+id: plan_step_accidental_obvious
+stage: plan_step
+type: accidental
+strength: obvious
+description: Wrong parameter, obvious. The first quoted string or email address in the step instruction is replaced with WRONG-VALUE.
+op: regex_replace
+payload: {pattern: "'[^']+'|\"[^\"]+\"|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[a-z]{2,}", replacement: "'WRONG-VALUE'"}
