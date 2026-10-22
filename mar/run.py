@@ -19,13 +19,14 @@ from typing import Literal
 
 from agentdojo.functions_runtime import TaskEnvironment
 
-from mar.agents import Executor, Planner, Researcher, ToolResult, load_prompt, prompt_hashes, tool_loop
+from mar.agents import Executor, Planner, Researcher, ToolResult, Verifier, load_prompt, prompt_hashes, tool_loop
 from mar.artifacts import Artifact, Finding, PlanStep, ProvenanceGraph, ToolAction
 from mar.config import ExperimentConfig, TaskSet, load_experiment, load_task_set
 from mar.env import TOOL_ACTION_CLASSES, ActionClass, Env
-from mar.faults import FaultTemplate, inject, load_templates, position_for, templates_hash
+from mar.faults import FaultTemplate, Oracle, inject, load_templates, position_for, templates_hash
 from mar.llm import LLMClient, LLMResponse
 from mar.metrics import taint_for_run
+from mar.recovery import POLICIES, NoRecovery, RecoveryPolicy
 
 
 @dataclass
@@ -220,6 +221,10 @@ class PipelineResult:
     checkpoint_before_fault: Checkpoint | None = None
     fault_applied: bool | None = None
     fault_artifact_id: str | None = None
+    recovered: bool = False
+    recovery_llm_calls: int = 0
+    discarded_artifacts: int = 0
+    verifier_rejections: int = 0
 
 
 class _RecordingLLM:
@@ -251,14 +256,20 @@ def run_pipeline(
     task_id: str,
     checkpoint: Checkpoint | None = None,
     fault: tuple[FaultTemplate, int] | None = None,
+    policy: RecoveryPolicy | None = None,
+    delay: int | Literal["all"] = "all",
 ) -> PipelineResult:
     """Researcher → planner → one executor per step, with an optional fault at a stage boundary.
 
     `fault` is (template, position_seed); the position within the stage is derived from the seed.
+    When the oracle reveals the fault (after `delay` executor steps, or at the end for "all"), the
+    policy's plan is applied: a restart reruns from scratch or from the clean checkpoint.
     """
+    policy = policy or NoRecovery()
     recording = _RecordingLLM(llm, record)
     inputs = {"task_id": task_id, "prompt": env.prompt}
     result = PipelineResult(output="", utility=False, llm_calls=0, plan_retries=0)
+    verifier = Verifier() if policy.verify_every_artifact else None
 
     if checkpoint is not None:
         env.restore(checkpoint.snapshot)
@@ -271,23 +282,29 @@ def run_pipeline(
         findings, steps = [], []
 
     if checkpoint is None:
-        research_runtime = EnvToolRuntime(env, f"{task_id}:research", on_action=record.add_tool_action, allowed=read_only_tools(env))
-        findings = Researcher().run(inputs, recording, research_runtime)
+        def research() -> list[Any]:
+            runtime = EnvToolRuntime(env, f"{task_id}:research", on_action=record.add_tool_action, allowed=read_only_tools(env))
+            return Researcher().run(inputs, recording, runtime)
+
+        findings = _verified(research, verifier, inputs, recording, result)
         findings = _maybe_inject(fault, "finding", findings, findings, env, record, task_id, result, stage_name="findings")
         for finding in findings:
             record.add_artifact(finding)
 
     plan_retries = 0
     if checkpoint is None or checkpoint.stage == "findings":
-        steps = Planner().run({**inputs, "findings": findings}, recording)
+        steps = _verified(lambda: Planner().run({**inputs, "findings": findings}, recording), verifier, inputs, recording, result)
         plan_retries = steps[0].content["retries"] if steps else 0
         steps = _maybe_inject(fault, "plan_step", steps, findings + steps, env, record, task_id, result, stage_name="plan")
         for step in steps:
             record.add_artifact(step)
 
+    oracle = Oracle(result.fault_artifact_id, 0, delay) if result.fault_applied and result.fault_artifact_id else None
+
     by_id = {f.id: f for f in findings}
     outputs = []
-    for step in steps:
+    revealed: str | None = None
+    for n, step in enumerate(steps, 1):
         context = "\n".join(f"- {by_id[c].content.get('text', '')}" for c in step.cites if c in by_id)
         runtime = EnvToolRuntime(env, step.id, on_action=record.add_tool_action)
         [executed] = Executor().run(
@@ -297,12 +314,53 @@ def run_pipeline(
         )
         record.add_artifact(executed)
         outputs.append(executed.content["output"])
+        if oracle and (revealed := oracle.reveal_at(n, final=n == len(steps))):
+            break
 
     result.output = "\n".join(outputs)
     result.utility = env.check_utility(result.output)
     result.llm_calls = recording.calls
     result.plan_retries = plan_retries
+    if revealed:
+        record.emit("oracle_revealed", artifact_id=revealed, after_step=n)
+        _recover(policy.on_reveal(revealed, record.graph, record), env, llm, record, task_id, result)
     return result
+
+
+def _verified(produce: Callable[[], list[Any]], verifier: Verifier | None, inputs: dict, llm: LLMClient, result: PipelineResult) -> list[Any]:
+    """Produce a stage's artifacts; with a verifier, regenerate the stage once if any is rejected."""
+    artifacts = produce()
+    if verifier is None:
+        return artifacts
+    for attempt in range(2):
+        for artifact in artifacts:
+            verifier.run({**inputs, "artifact": artifact}, llm)
+        if all(a.content.get("verified") for a in artifacts) or attempt == 1:
+            return artifacts
+        result.verifier_rejections += 1
+        artifacts = produce()
+    return artifacts
+
+
+def _recover(plan, env: Env, llm: LLMClient, record: RunRecord, task_id: str, result: PipelineResult) -> None:
+    """Apply a restart plan: drop the contaminated artifacts and rerun without the fault."""
+    if plan.restart_from is None:
+        return
+    if plan.restart_from == "scratch":
+        checkpoint = None
+        env.restore(env.pre_environment)
+        env.trace = []
+    else:
+        checkpoint = result.checkpoint_before_fault
+    discarded = len(record.graph.artifacts)
+    record.graph.artifacts.clear()
+    record.emit("recovery_action", restart_from=plan.restart_from, discarded=discarded)
+    rerun = run_pipeline(env, llm, record, task_id, checkpoint=checkpoint)
+    result.output, result.utility = rerun.output, rerun.utility
+    result.llm_calls += rerun.llm_calls
+    result.recovery_llm_calls = rerun.llm_calls
+    result.recovered = True
+    result.discarded_artifacts = discarded
 
 
 def _maybe_inject(
@@ -376,6 +434,10 @@ def _result_dict(record: RunRecord, result: PipelineResult, started: float) -> d
         "seconds": round(time.perf_counter() - started, 1),
         "fault_applied": result.fault_applied,
         "fault_artifact_id": result.fault_artifact_id,
+        "recovered": result.recovered,
+        "recovery_llm_calls": result.recovery_llm_calls,
+        "discarded_artifacts": result.discarded_artifacts,
+        "verifier_rejections": result.verifier_rejections,
     }
 
 
@@ -403,7 +465,8 @@ def run_job(job: Job, config: ExperimentConfig, tasks: TaskSet, llm: LLMClient, 
     started = time.perf_counter()
     by_id = {t.id: t for t in templates}
     fault = (by_id[job.fault_id], job.seed) if job.fault_id else None
-    result = run_pipeline(env, llm, record, job.task_id, fault=fault)
+    policy = POLICIES[job.condition]()
+    result = run_pipeline(env, llm, record, job.task_id, fault=fault, policy=policy, delay=config.detection_delays[0])
     summary = _result_dict(record, result, started)
     if fault and job.condition == "none" and result.fault_applied and result.checkpoint_before_fault:
         twin = fork_twin(record, result.checkpoint_before_fault, env, llm, config, runs_dir)

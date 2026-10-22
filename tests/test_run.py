@@ -207,3 +207,71 @@ def test_plan_checkpoint_holds_findings_and_clean_steps(tmp_path, fake_llm_respo
     assert result.checkpoint_before_fault.stage == "plan" and kinds == ["finding", "plan_step"]
     assert result.checkpoint_before_fault.artifacts[1].content["instruction"] == "email alice"
     assert record.graph.artifacts["user_task_0:p0"].content["instruction"] == "email bob"
+
+
+from mar.agents import VERDICT_SCHEMA
+from mar.recovery import AlwaysVerify, RestartStage
+
+
+def _finding_fault():
+    return FaultTemplate(id="date", stage="finding", type="accidental", strength="obvious", description="d",
+                         op="regex_replace", payload={"pattern": r"\d{4}-\d{2}-\d{2}", "replacement": "2031-01-01"})
+
+
+def test_restart_stage_reruns_from_clean_findings(tmp_path, fake_llm_responses, resp):
+    env = Env("workspace", "user_task_0")
+    gt = env.task.GROUND_TRUTH_OUTPUT
+    plan = json.dumps({"steps": [{"instruction": "report", "cites": ["user_task_0:f0"]}]})
+    llm = fake_llm_responses(
+        resp(tool_calls=[{"id": "c1", "name": "search_calendar_events", "args": {"query": "Networking event", "date": "2024-05-26"}}]),
+        resp(content="ok"),
+        resp(content=json.dumps({"findings": [{"source": "calendar", "content": "on 2024-05-26: " + gt}]})),
+        resp(content=plan),
+        resp(content="wrong answer"),
+        resp(content=plan),
+        resp(content=gt),
+    )
+    record = RunRecord.start(tmp_path, {"run_id": "r1"})
+    result = run_pipeline(env, llm, record, "user_task_0", fault=(_finding_fault(), 0), policy=RestartStage(), delay="all")
+    assert result.recovered is True and result.utility is True
+    assert result.llm_calls == 7 and result.recovery_llm_calls == 2
+    recovery = [e for e in record.events if e["kind"] == "recovery_action"]
+    assert recovery[0]["restart_from"] == "findings" and recovery[0]["discarded"] == 3
+    assert "2031-01-01" not in record.graph.artifacts["user_task_0:f0"].content["text"]
+
+
+def test_always_verify_calls_verifier_per_artifact(tmp_path, fake_llm_responses, resp):
+    env = Env("workspace", "user_task_0")
+    gt = env.task.GROUND_TRUTH_OUTPUT
+    ok = resp(content=json.dumps({"ok": True, "reason": "fine"}))
+    llm = fake_llm_responses(
+        resp(content="ok"),
+        resp(content=json.dumps({"findings": [{"source": "calendar", "content": gt}]})),
+        ok,
+        resp(content=json.dumps({"steps": [{"instruction": "report", "cites": ["user_task_0:f0"]}]})),
+        ok,
+        resp(content=gt),
+    )
+    record = RunRecord.start(tmp_path, {"run_id": "r1"})
+    result = run_pipeline(env, llm, record, "user_task_0", policy=AlwaysVerify())
+    assert result.utility is True and result.llm_calls == 6 and result.verifier_rejections == 0
+    assert sum(c["schema"] is VERDICT_SCHEMA for c in llm.calls) == 2
+    assert record.graph.artifacts["user_task_0:f0"].content["verified"] is True
+
+
+def test_always_verify_regenerates_a_rejected_artifact(tmp_path, fake_llm_responses, resp):
+    env = Env("workspace", "user_task_0")
+    gt = env.task.GROUND_TRUTH_OUTPUT
+    findings = resp(content=json.dumps({"findings": [{"source": "calendar", "content": gt}]}))
+    llm = fake_llm_responses(
+        resp(content="ok"), findings,
+        resp(content=json.dumps({"ok": False, "reason": "suspicious"})),
+        resp(content="ok"), findings,
+        resp(content=json.dumps({"ok": True, "reason": "fine"})),
+        resp(content=json.dumps({"steps": [{"instruction": "report", "cites": ["user_task_0:f0"]}]})),
+        resp(content=json.dumps({"ok": True, "reason": "fine"})),
+        resp(content=gt),
+    )
+    record = RunRecord.start(tmp_path, {"run_id": "r1"})
+    result = run_pipeline(env, llm, record, "user_task_0", policy=AlwaysVerify())
+    assert result.verifier_rejections == 1 and result.llm_calls == 9 and result.utility is True

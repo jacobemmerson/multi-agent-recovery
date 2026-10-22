@@ -219,8 +219,31 @@ class Executor:
         ]
 
 
+VERDICT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {"ok": {"type": "boolean"}, "reason": {"type": "string"}},
+    "required": ["ok", "reason"],
+    "additionalProperties": False,
+}
+
+
 class Verifier:
-    """Checks one artifact before it is passed on (always-verify baseline)."""
+    """Checks one artifact before it is passed on (always-verify baseline).
+
+    Writes content["verified"] and content["verifier_reason"] on the artifact; returns no artifacts.
+    """
 
     def run(self, inputs, llm, tools=None) -> list[Artifact]:
-        raise NotImplementedError
+        artifact: Artifact = inputs["artifact"]
+        messages = [
+            {"role": "system", "content": load_prompt("verifier")},
+            {
+                "role": "user",
+                "content": f"Task: {inputs['prompt']}\n\nArtifact ({artifact.kind}, from {artifact.producer}):\n"
+                + json.dumps({k: v for k, v in artifact.content.items() if k not in ("verified", "verifier_reason")}),
+            },
+        ]
+        verdict = json.loads(llm.complete(messages, schema=VERDICT_SCHEMA).content or "{}")
+        artifact.content["verified"] = bool(verdict.get("ok", False))
+        artifact.content["verifier_reason"] = verdict.get("reason", "")
+        return []

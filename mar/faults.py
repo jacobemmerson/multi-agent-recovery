@@ -112,7 +112,8 @@ class Oracle:
         self.injected_at_step = injected_at_step
         self.delay = delay
 
-    def reveal_at(self, step: int) -> str | None:
+    def reveal_at(self, step: int, final: bool = False) -> str | None:
+        """Fault identity once `delay` steps have passed since injection; "all" means only at the end."""
         if self.delay == "all":
-            return None
+            return self.fault_artifact_id if final else None
         return self.fault_artifact_id if step >= self.injected_at_step + self.delay else None

@@ -18,6 +18,7 @@ def test_oracle_reveals_after_delay():
     assert oracle.reveal_at(4) is None
     assert oracle.reveal_at(5) == "f1"
     assert Oracle("f1", 3, "all").reveal_at(100) is None
+    assert Oracle("f1", 3, "all").reveal_at(100, final=True) == "f1"
 
 
 def test_taint_counts():
