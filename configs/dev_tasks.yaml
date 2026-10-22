@@ -1,0 +1,4 @@
+# Development split: ~20 tasks on one AgentDojo suite.
+benchmark_version: v1.2
+suites:
+  workspace: []   # fill with user_task ids after the day-1 check

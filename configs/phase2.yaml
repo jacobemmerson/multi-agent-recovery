@@ -1,0 +1,7 @@
+name: phase2
+model: {name: api-glm-5.3, temperature: 0.0, max_tokens: 4096}
+tasks: configs/dev_tasks.yaml
+repeats: 3
+conditions: [dai_rollback, dai_rollback_no_restore, staged_commit, taint_gate, agentdojo_defenses, stage_everything]
+fault_templates: data/fault_templates
+detection_delays: [0, 1, 2, 4, all]

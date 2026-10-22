@@ -1,0 +1,6 @@
+# Evaluation split: 50+ tasks across two suites plus TAMAS-derived adversarial templates.
+# Do not run until Phase 2 tuning is finished.
+benchmark_version: v1.2
+suites:
+  workspace: []
+  slack: []

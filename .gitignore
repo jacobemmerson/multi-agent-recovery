@@ -1,0 +1,7 @@
+.env
+runs/
+figures/
+*.parquet
+__pycache__/
+.pytest_cache/
+.venv/
