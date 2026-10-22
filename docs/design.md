@@ -89,3 +89,13 @@ model spends reasoning tokens, both captured in the per-call usage log.
 user_task_0 and user_task_17: utility True on both, 7 to 8 LLM calls, 5 to 6 findings, one plan step
 citing 2 to 3 findings. Planner needed 1 and 2 retries to produce valid citations; the retry rate is
 recorded per step and should be watched (proposal risk: "planner does not cite findings").
+
+## Noise floor, smoke runs (2026-10-21, api-glm-5.3-flash, exact diff)
+
+| Task | findings | plan steps | executed steps | tool sequence differs |
+| --- | --- | --- | --- | --- |
+| user_task_0 | 1.00 | 1.00 | 1.00 | False |
+| user_task_17 | 1.00 | 1.00 | 1.00 | True |
+| user_task_13 | 1.00 | 1.00 | 1.00 | True |
+
+Exact diff puts the floor at or near 1.0 for every kind: two clean runs almost never produce byte-identical artifacts. The LLM judge (Phase 1 follow-up) is required before any propagation number is read against this floor.
