@@ -5,6 +5,9 @@ Under/over-taint (RQ1), re-execution divergence (RQ2), residual irreversible act
 work, latency, tokens, and tracking overhead. Aggregation filters by manifest fields.
 """
 
+import json
+import math
+import random
 from pathlib import Path
 
 import pandas as pd
@@ -54,5 +57,33 @@ def cost(run) -> dict[str, float]:
     raise NotImplementedError
 
 
+def bootstrap_ci(values, n: int = 1000, seed: int = 0, level: float = 0.95) -> tuple[float, float]:
+    """Percentile bootstrap interval for the mean."""
+    values = list(values)
+    if not values:
+        return (math.nan, math.nan)
+    rng = random.Random(seed)
+    means = sorted(sum(rng.choices(values, k=len(values))) / len(values) for _ in range(n))
+    lo = means[int((1 - level) / 2 * n)]
+    hi = means[min(int((1 + level) / 2 * n), n - 1)]
+    return (lo, hi)
+
+
 def aggregate(runs_dir: Path, out: Path) -> pd.DataFrame:
-    raise NotImplementedError
+    """One row per finished run: manifest fields plus result fields. Written to `out` as parquet."""
+    rows = []
+    skipped = 0
+    for manifest_path in sorted(runs_dir.glob("*/manifest.json")):
+        result_path = manifest_path.parent / "result.json"
+        if not result_path.exists():
+            skipped += 1
+            continue
+        manifest = json.loads(manifest_path.read_text())
+        if "prompt_hashes" in manifest:
+            manifest["prompt_hashes"] = json.dumps(manifest["prompt_hashes"])
+        rows.append(manifest | json.loads(result_path.read_text()))
+    frame = pd.DataFrame(rows)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    frame.to_parquet(out, index=False)
+    print(f"aggregated {len(frame)} runs to {out}" + (f", skipped {skipped} unfinished" if skipped else ""))
+    return frame

@@ -51,4 +51,6 @@ def _run(args: argparse.Namespace) -> None:
 
 
 def _aggregate(args: argparse.Namespace) -> None:
-    raise NotImplementedError("mar aggregate arrives with metrics.aggregate")
+    from mar.metrics import aggregate
+
+    aggregate(args.runs_dir, args.out)

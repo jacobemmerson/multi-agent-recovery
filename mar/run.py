@@ -61,6 +61,7 @@ class RunRecord:
 
     def finish(self, result: dict[str, Any]) -> None:
         self.result = result
+        (self.directory / "manifest.json").write_text(json.dumps(self.manifest, indent=2, default=str))
         (self.directory / "provenance.json").write_text(self.graph.model_dump_json(indent=2))
         artifacts_dir = self.directory / "artifacts"
         artifacts_dir.mkdir(exist_ok=True)
