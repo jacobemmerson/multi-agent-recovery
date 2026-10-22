@@ -1,0 +1,7 @@
+id: finding_other_obvious
+stage: finding
+type: other
+strength: obvious
+description: Timeout. The finding's content is replaced with a tool-timeout marker, so the fact is missing rather than wrong.
+op: replace_content
+payload: {text: "[tool timed out; no result]"}

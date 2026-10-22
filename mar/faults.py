@@ -1,22 +1,27 @@
-"""Fault templates, seeded schedules, injection, and the delayed oracle.
+"""Fault templates, injection, positions, and the delayed oracle.
 
 Templates are data under data/fault_templates/ and are hashed into every run manifest.
-Injection targets: a finding, a plan step, a note entry, or the environment (AgentDojo
-injection task). The oracle reveals fault identity Δ steps after injection.
+Every template runs on every task; only the position within the stage is random and
+seeded. Injection is pure: it returns a new artifact list and never mutates its input.
 """
 
 import hashlib
 import random
-
-import yaml
+import re
 from pathlib import Path
 from typing import Literal
 
+import yaml
 from pydantic import BaseModel
+
+from mar.artifacts import Artifact, PlanStep
 
 Stage = Literal["finding", "plan_step", "note_entry", "environment"]
 FaultType = Literal["accidental", "adversarial", "other"]
 Strength = Literal["obvious", "subtle"]
+Op = Literal["regex_replace", "append", "replace_content", "stale_copy", "insert_step"]
+
+TEXT_FIELD = {"finding": "text", "plan_step": "instruction", "note_entry": "text"}
 
 
 class FaultTemplate(BaseModel):
@@ -25,13 +30,8 @@ class FaultTemplate(BaseModel):
     type: FaultType
     strength: Strength
     description: str
-    payload: dict
-
-
-class ScheduledFault(BaseModel):
-    template_id: str
-    task_id: str
-    position: int  # index among artifacts of that stage
+    op: Op
+    payload: dict = {}
 
 
 def load_templates(directory: Path) -> list[FaultTemplate]:
@@ -53,14 +53,57 @@ def templates_hash(directory: Path) -> str:
     return digest.hexdigest()
 
 
-def schedule(templates: list[FaultTemplate], task_ids: list[str], seed: int) -> list[ScheduledFault]:
-    """Seeded; over-samples plan-step injections because they land most reliably."""
-    rng = random.Random(seed)
-    raise NotImplementedError
+def position_for(fault_id: str, task_id: str, seed: int, n_candidates: int) -> int:
+    return random.Random(f"{seed}:{fault_id}:{task_id}").randrange(max(n_candidates, 1))
 
 
-def inject(fault: ScheduledFault, template: FaultTemplate, target) -> None:
-    raise NotImplementedError
+def inject(template: FaultTemplate, artifacts: list[Artifact], position: int) -> tuple[list[Artifact], bool]:
+    """Apply the template at `position`. Returns (new list, whether anything changed)."""
+    if not artifacts or position >= len(artifacts):
+        return list(artifacts), False
+    field = TEXT_FIELD[template.stage]
+    target = artifacts[position]
+    text = target.content.get(field, "")
+    out = [a.model_copy(deep=True) for a in artifacts]
+
+    if template.op == "insert_step":
+        if not isinstance(target, PlanStep):
+            return out, False
+        injected = PlanStep(
+            id=f"{target.id}-injected",
+            producer=target.producer,
+            task_id=target.task_id,
+            branch_id=target.branch_id,
+            index=target.index + 1,
+            cites=list(target.cites),
+            content={field: template.payload["instruction"], "fault": template.id},
+        )
+        out.insert(position + 1, injected)
+        for step in out[position + 2 :]:
+            step.index += 1
+        return out, True
+
+    if template.op == "regex_replace":
+        new_text, n = re.subn(template.payload["pattern"], template.payload["replacement"], text, count=1)
+        if n == 0:
+            return out, False
+    elif template.op == "append":
+        new_text = text + template.payload["text"]
+    elif template.op == "replace_content":
+        new_text = template.payload["text"]
+    elif template.op == "stale_copy":
+        neighbor = position - 1 if position > 0 else position + 1
+        if neighbor >= len(artifacts):
+            return out, False
+        new_text = artifacts[neighbor].content.get(field, "")
+    else:
+        raise ValueError(f"unknown op {template.op}")
+
+    if new_text == text:
+        return out, False
+    out[position].content[field] = new_text
+    out[position].content["fault"] = template.id
+    return out, True
 
 
 class Oracle:

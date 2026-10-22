@@ -23,7 +23,7 @@ from mar.agents import Executor, Planner, Researcher, ToolResult, load_prompt, p
 from mar.artifacts import Artifact, Finding, PlanStep, ProvenanceGraph, ToolAction
 from mar.config import ExperimentConfig, TaskSet, load_experiment, load_task_set
 from mar.env import TOOL_ACTION_CLASSES, ActionClass, Env
-from mar.faults import FaultTemplate, load_templates, templates_hash
+from mar.faults import FaultTemplate, inject, load_templates, position_for, templates_hash
 from mar.llm import LLMClient, LLMResponse
 
 
@@ -216,6 +216,8 @@ class PipelineResult:
     llm_calls: int
     plan_retries: int
     checkpoint_before_fault: Checkpoint | None = None
+    fault_applied: bool | None = None
+    fault_artifact_id: str | None = None
 
 
 class _RecordingLLM:
@@ -246,21 +248,27 @@ def run_pipeline(
     record: RunRecord,
     task_id: str,
     checkpoint: Checkpoint | None = None,
-    fault: Any = None,
+    fault: tuple[FaultTemplate, int] | None = None,
 ) -> PipelineResult:
-    """Researcher → planner → one executor per step. Fault hooks land with the fault injector."""
+    """Researcher → planner → one executor per step, with an optional fault at a stage boundary.
+
+    `fault` is (template, position_seed); the position within the stage is derived from the seed.
+    """
     recording = _RecordingLLM(llm, record)
     inputs = {"task_id": task_id, "prompt": env.prompt}
+    result = PipelineResult(output="", utility=False, llm_calls=0, plan_retries=0)
 
     research_runtime = EnvToolRuntime(env, f"{task_id}:research", on_action=record.add_tool_action, allowed=read_only_tools(env))
     findings = Researcher().run(inputs, recording, research_runtime)
+    findings = _maybe_inject(fault, "finding", findings, env, record, task_id, result, stage_name="findings")
     for finding in findings:
         record.add_artifact(finding)
 
     steps = Planner().run({**inputs, "findings": findings}, recording)
+    plan_retries = steps[0].content["retries"] if steps else 0
+    steps = _maybe_inject(fault, "plan_step", steps, env, record, task_id, result, stage_name="plan")
     for step in steps:
         record.add_artifact(step)
-    plan_retries = steps[0].content["retries"] if steps else 0
 
     by_id = {f.id: f for f in findings}
     outputs = []
@@ -275,8 +283,35 @@ def run_pipeline(
         record.add_artifact(executed)
         outputs.append(executed.content["output"])
 
-    output = "\n".join(outputs)
-    return PipelineResult(output=output, utility=env.check_utility(output), llm_calls=recording.calls, plan_retries=plan_retries)
+    result.output = "\n".join(outputs)
+    result.utility = env.check_utility(result.output)
+    result.llm_calls = recording.calls
+    result.plan_retries = plan_retries
+    return result
+
+
+def _maybe_inject(
+    fault: tuple[FaultTemplate, int] | None,
+    stage: str,
+    artifacts: list[Any],
+    env: Env,
+    record: RunRecord,
+    task_id: str,
+    result: PipelineResult,
+    stage_name: Literal["findings", "plan"],
+) -> list[Any]:
+    """At a stage boundary: save the clean checkpoint, then inject if the fault targets this stage."""
+    if fault is None or fault[0].stage != stage:
+        return artifacts
+    template, seed = fault
+    result.checkpoint_before_fault = Checkpoint(stage_name, [a.model_copy(deep=True) for a in artifacts], env.snapshot())
+    position = position_for(template.id, task_id, seed, len(artifacts))
+    injected, applied = inject(template, artifacts, position)
+    changed = [a for a in injected if a.content.get("fault") == template.id]
+    result.fault_applied = applied
+    result.fault_artifact_id = changed[0].id if changed else None
+    record.emit("fault_injected", template_id=template.id, stage=stage, position=position, applied=applied, artifact_id=result.fault_artifact_id)
+    return injected
 
 
 @dataclass(frozen=True)
@@ -299,13 +334,15 @@ class Job:
 
 
 def expand_jobs(config: ExperimentConfig, tasks: TaskSet, templates: list[FaultTemplate]) -> list[Job]:
-    """Deterministic grid: per task and repeat, one clean job per condition."""
+    """Deterministic grid: per task, repeat and condition, one clean job and one job per template."""
+    phase1_templates = [t for t in templates if t.stage in ("finding", "plan_step")]
     jobs = []
     for suite, task_ids in sorted(tasks.suites.items()):
         for task_id in task_ids:
             for repeat in range(config.repeats):
                 for condition in config.conditions:
                     jobs.append(Job(suite, task_id, condition, None, repeat))
+                    jobs.extend(Job(suite, task_id, condition, t.id, repeat) for t in phase1_templates)
     return jobs
 
 
@@ -317,7 +354,9 @@ def run_job(job: Job, config: ExperimentConfig, tasks: TaskSet, llm: LLMClient, 
     )
     record = RunRecord.start(runs_dir, manifest)
     started = time.perf_counter()
-    result = run_pipeline(env, llm, record, job.task_id)
+    by_id = {t.id: t for t in templates}
+    fault = (by_id[job.fault_id], job.seed) if job.fault_id else None
+    result = run_pipeline(env, llm, record, job.task_id, fault=fault)
     actions = record.graph.tool_actions.values()
     record.finish(
         {
@@ -328,7 +367,8 @@ def run_job(job: Job, config: ExperimentConfig, tasks: TaskSet, llm: LLMClient, 
             "unauthorized_actions": sum(not a.authorized for a in actions),
             "irreversible_actions": sum(a.action_class == ActionClass.IRREVERSIBLE.value for a in actions),
             "seconds": round(time.perf_counter() - started, 1),
-            "fault_applied": None,
+            "fault_applied": result.fault_applied,
+            "fault_artifact_id": result.fault_artifact_id,
             "ignored": None,
         }
     )

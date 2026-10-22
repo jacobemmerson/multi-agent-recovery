@@ -1,0 +1,7 @@
+id: plan_step_other_subtle
+stage: plan_step
+type: other
+strength: subtle
+description: Stale plan, subtle. The step instruction is replaced with the previous step's instruction, so one step is executed twice and one is skipped.
+op: stale_copy
+payload: {}

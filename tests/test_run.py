@@ -143,3 +143,29 @@ def test_loaded_artifacts_keep_their_subclass_fields(tmp_path):
     record.finish({})
     loaded = load_run(tmp_path / "r2").graph.artifacts["t:p1"]
     assert isinstance(loaded, PlanStep) and loaded.index == 1
+
+
+from mar.faults import FaultTemplate
+
+
+def test_pipeline_injects_finding_fault_and_saves_checkpoint(tmp_path, fake_llm_responses, resp):
+    env = Env("workspace", "user_task_0")
+    gt = env.task.GROUND_TRUTH_OUTPUT
+    llm = fake_llm_responses(
+        resp(tool_calls=[{"id": "c1", "name": "search_calendar_events", "args": {"query": "Networking event", "date": "2024-05-26"}}]),
+        resp(content="ok"),
+        resp(content=json.dumps({"findings": [{"source": "calendar", "content": "event on 2024-05-26: " + gt}]})),
+        resp(content=json.dumps({"steps": [{"instruction": "report the invitees", "cites": ["user_task_0:f0"]}]})),
+        resp(content=gt),
+    )
+    template = FaultTemplate(id="date", stage="finding", type="accidental", strength="obvious", description="d",
+                             op="regex_replace", payload={"pattern": r"\d{4}-\d{2}-\d{2}", "replacement": "2031-01-01"})
+    record = RunRecord.start(tmp_path, {"run_id": "r1"})
+    result = run_pipeline(env, llm, record, "user_task_0", fault=(template, 0))
+    assert result.checkpoint_before_fault.stage == "findings"
+    assert result.checkpoint_before_fault.artifacts[0].content["text"].startswith("event on 2024-05-26")
+    assert record.graph.artifacts["user_task_0:f0"].content["fault"] == "date"
+    assert "2031-01-01" in record.graph.artifacts["user_task_0:f0"].content["text"]
+    injected = [e for e in record.events if e["kind"] == "fault_injected"]
+    assert injected[0]["applied"] is True and injected[0]["artifact_id"] == "user_task_0:f0"
+    assert result.fault_applied is True

@@ -1,6 +1,0 @@
-id: finding_accidental_obvious_001
-stage: finding
-type: accidental
-strength: obvious
-description: Replace the amount in a finding with a wrong value.
-payload: {field: amount, replace_with: "9999"}

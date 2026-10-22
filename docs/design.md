@@ -99,3 +99,8 @@ recorded per step and should be watched (proposal risk: "planner does not cite f
 | user_task_13 | 1.00 | 1.00 | 1.00 | True |
 
 Exact diff puts the floor at or near 1.0 for every kind: two clean runs almost never produce byte-identical artifacts. The LLM judge (Phase 1 follow-up) is required before any propagation number is read against this floor.
+
+## Frozen fault templates (2026-10-21)
+
+12 templates in `data/fault_templates/` (finding, plan_step x accidental, adversarial, other x obvious, subtle).
+sha256 of the directory: `62a28fd8dfe1855d3800127012ef660ecc5f83f6a15928cd8f763e4719820f3f`. Templates are not edited after this point; a new grid is a new directory.
