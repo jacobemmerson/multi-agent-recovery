@@ -83,3 +83,9 @@ noise-floor clean runs are independent.
 `mar day1 --model api-glm-5.3 --n 5` on the workspace suite: passed 5/5, mean 6.2 s per task,
 13 LLM calls total. GLM 5.3 clears the gate; no model switch needed. The endpoint runs vLLM and the
 model spends reasoning tokens, both captured in the per-call usage log.
+
+## Pipeline live check (2026-10-21, api-glm-5.3-flash)
+
+user_task_0 and user_task_17: utility True on both, 7 to 8 LLM calls, 5 to 6 findings, one plan step
+citing 2 to 3 findings. Planner needed 1 and 2 retries to produce valid citations; the retry rate is
+recorded per step and should be watched (proposal risk: "planner does not cite findings").
