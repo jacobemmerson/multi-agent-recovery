@@ -85,9 +85,14 @@ class OpenAICompatibleClient:
 def _parse_tool_call(call: Any) -> dict[str, Any]:
     parsed: dict[str, Any] = {"id": call.id, "name": call.function.name, "args": {}}
     try:
-        parsed["args"] = json.loads(call.function.arguments or "{}")
+        args = json.loads(call.function.arguments or "{}")
     except json.JSONDecodeError as error:
         parsed["args_error"] = f"malformed tool arguments: {error}"
+        return parsed
+    if not isinstance(args, dict):
+        parsed["args_error"] = f"tool arguments must be a JSON object, got {type(args).__name__}"
+        return parsed
+    parsed["args"] = args
     return parsed
 
 

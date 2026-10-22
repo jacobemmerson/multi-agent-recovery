@@ -37,13 +37,20 @@ class RunRecord:
     graph: ProvenanceGraph = field(default_factory=ProvenanceGraph)
     events: list[dict[str, Any]] = field(default_factory=list)
     result: dict[str, Any] | None = None
+    action_count: int = 0
 
     @classmethod
     def start(cls, runs_dir: Path, manifest: dict[str, Any]) -> "RunRecord":
         directory = runs_dir / manifest["run_id"]
         directory.mkdir(parents=True, exist_ok=True)
         (directory / "manifest.json").write_text(json.dumps(manifest, indent=2, default=str))
+        (directory / "events.jsonl").write_text("")
         return cls(manifest["run_id"], directory, manifest)
+
+    def next_action_id(self, step_id: str) -> str:
+        """Unique within the run, so actions from before a restart are never overwritten."""
+        self.action_count += 1
+        return f"{step_id}:a{self.action_count}"
 
     def add_artifact(self, artifact: Artifact) -> None:
         self.graph.add(artifact)
@@ -134,11 +141,13 @@ class EnvToolRuntime:
         step_id: str,
         on_action: Callable[[ToolAction], None] | None = None,
         allowed: set[str] | None = None,
+        next_id: Callable[[str], str] | None = None,
     ) -> None:
         self.env = env
         self.step_id = step_id
         self.on_action = on_action
         self.allowed = allowed
+        self.next_id = next_id
         self.count = 0
 
     def tool_schemas(self) -> list[dict[str, Any]]:
@@ -149,13 +158,14 @@ class EnvToolRuntime:
 
     def call(self, name: str, args: dict[str, Any]) -> ToolResult:
         self.count += 1
+        action_id = self.next_id(self.step_id) if self.next_id else f"{self.step_id}:a{self.count}"
         if self.allowed is not None and name not in self.allowed:
-            return ToolResult("blocked", "tool not available to this agent", f"{self.step_id}:a{self.count}")
+            return ToolResult("blocked", "tool not available to this agent", action_id)
         result, error = self.env.call(name, args)
         output = error if error is not None else _stringify(result)
         known = name in TOOL_ACTION_CLASSES
         action = ToolAction(
-            id=f"{self.step_id}:a{self.count}",
+            id=action_id,
             step_id=self.step_id,
             tool=name,
             args=args,
@@ -284,19 +294,26 @@ def run_pipeline(
 
     if checkpoint is None:
         def research() -> list[Any]:
-            runtime = EnvToolRuntime(env, f"{task_id}:research", on_action=record.add_tool_action, allowed=read_only_tools(env))
+            runtime = EnvToolRuntime(
+                env, f"{task_id}:research", on_action=record.add_tool_action, allowed=read_only_tools(env), next_id=record.next_action_id
+            )
             return Researcher().run(inputs, recording, runtime)
 
-        findings = _verified(research, verifier, inputs, recording, result)
+        findings = research()
         findings = _maybe_inject(fault, "finding", findings, findings, env, record, task_id, result, stage_name="findings")
+        findings = _verified(findings, research, verifier, inputs, recording, result)
         for finding in findings:
             record.add_artifact(finding)
 
     plan_retries = 0
     if checkpoint is None or checkpoint.stage == "findings":
-        steps = _verified(lambda: Planner().run({**inputs, "findings": findings}, recording), verifier, inputs, recording, result)
+        def plan() -> list[Any]:
+            return Planner().run({**inputs, "findings": findings}, recording)
+
+        steps = plan()
         plan_retries = steps[0].content["retries"] if steps else 0
         steps = _maybe_inject(fault, "plan_step", steps, findings + steps, env, record, task_id, result, stage_name="plan")
+        steps = _verified(steps, plan, verifier, inputs, recording, result)
         for step in steps:
             record.add_artifact(step)
 
@@ -307,7 +324,7 @@ def run_pipeline(
     revealed: str | None = None
     for n, step in enumerate(steps, 1):
         context = "\n".join(f"- {by_id[c].content.get('text', '')}" for c in step.cites if c in by_id)
-        runtime = EnvToolRuntime(env, step.id, on_action=record.add_tool_action)
+        runtime = EnvToolRuntime(env, step.id, on_action=record.add_tool_action, next_id=record.next_action_id)
         [executed] = Executor().run(
             {"task_id": task_id, "plan_step_id": step.id, "instruction": step.content["instruction"], "context": context},
             recording,
@@ -328,9 +345,13 @@ def run_pipeline(
     return result
 
 
-def _verified(produce: Callable[[], list[Any]], verifier: Verifier | None, inputs: dict, llm: LLMClient, result: PipelineResult) -> list[Any]:
-    """Produce a stage's artifacts; with a verifier, regenerate the stage once if any is rejected."""
-    artifacts = produce()
+def _verified(
+    artifacts: list[Any], regenerate: Callable[[], list[Any]], verifier: Verifier | None, inputs: dict, llm: LLMClient, result: PipelineResult
+) -> list[Any]:
+    """Verify a stage's (possibly faulted) artifacts; regenerate the stage once, clean, if any is rejected.
+
+    The fault is a one-off corruption of what arrived at this boundary, so a regenerated stage is not re-injected.
+    """
     if verifier is None:
         return artifacts
     for attempt in range(2):
@@ -339,7 +360,7 @@ def _verified(produce: Callable[[], list[Any]], verifier: Verifier | None, input
         if all(a.content.get("verified") for a in artifacts) or attempt == 1:
             return artifacts
         result.verifier_rejections += 1
-        artifacts = produce()
+        artifacts = regenerate()
     return artifacts
 
 
@@ -470,9 +491,26 @@ def run_job(job: Job, config: ExperimentConfig, tasks: TaskSet, llm: LLMClient, 
     result = run_pipeline(env, llm, record, job.task_id, fault=fault, policy=policy, delay=config.detection_delays[0])
     summary = _result_dict(record, result, started)
     if fault and job.condition == "none" and result.fault_applied and result.checkpoint_before_fault:
-        twin = fork_twin(record, result.checkpoint_before_fault, env, llm, config, runs_dir)
-        summary.update(taint_for_run(record, twin))
+        try:
+            twin = fork_twin(record, result.checkpoint_before_fault, env, llm, config, runs_dir)
+            summary.update(taint_for_run(record, twin))
+        except Exception as error:  # the faulted run is still a valid result; the twin is retried on resume
+            summary["twin_error"] = f"{type(error).__name__}: {error}"
     record.finish(summary)
+    return record
+
+
+def _write_error_result(job: Job, config: ExperimentConfig, runs_dir: Path, error: Exception) -> RunRecord:
+    """A job that raised still gets a result.json, so the batch continues and --resume retries it later."""
+    manifest = build_manifest(
+        config, run_id=job.run_id, suite=job.suite, task_id=job.task_id, condition=job.condition,
+        fault_id=job.fault_id, repeat=job.repeat, seed=job.seed,
+    )
+    record = RunRecord.start(runs_dir, manifest)
+    record.finish({"utility": False, "llm_calls": 0, "plan_retries": 0, "tool_calls": 0, "unauthorized_actions": 0,
+                   "irreversible_actions": 0, "seconds": 0.0, "fault_applied": None, "fault_artifact_id": None,
+                   "recovered": False, "recovery_llm_calls": 0, "discarded_artifacts": 0, "verifier_rejections": 0,
+                   "error": f"{type(error).__name__}: {error}"})
     return record
 
 
@@ -496,10 +534,14 @@ def run_experiment(
     directories = []
     for n, job in enumerate(jobs, 1):
         directory = runs_dir / job.run_id
-        if resume and (directory / "result.json").exists():
+        if resume and (directory / "result.json").exists() and "error" not in json.loads((directory / "result.json").read_text()):
             print(f"[{n}/{len(jobs)}] {job.run_id} skipped (done)")
         else:
-            record = run_job(job, config, task_set, llm, runs_dir, templates)
-            print(f"[{n}/{len(jobs)}] {job.run_id} utility={record.result['utility']} llm={record.result['llm_calls']} {record.result['seconds']}s")
+            try:
+                record = run_job(job, config, task_set, llm, runs_dir, templates)
+                print(f"[{n}/{len(jobs)}] {job.run_id} utility={record.result['utility']} llm={record.result['llm_calls']} {record.result['seconds']}s")
+            except Exception as error:
+                _write_error_result(job, config, runs_dir, error)
+                print(f"[{n}/{len(jobs)}] {job.run_id} ERROR {type(error).__name__}: {error}")
         directories.append(directory)
     return directories

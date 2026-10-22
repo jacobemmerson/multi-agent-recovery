@@ -4,14 +4,20 @@ AgentDojo checkers judge final state only, so intermediate artifacts need their 
 Every propagation or divergence number is read against the clean-vs-clean noise floor.
 """
 
-from itertools import zip_longest
-
 from mar.artifacts import Artifact, ProvenanceGraph
 from mar.llm import LLMClient
 
 
+TEXT_FIELD = {"finding": "text", "plan_step": "instruction", "executed_step": "output", "note_entry": "text"}
+
+
+def artifact_text(artifact: Artifact) -> str:
+    """The artifact's substantive text; metadata such as retries, verified, fault is ignored."""
+    return str(artifact.content.get(TEXT_FIELD[artifact.kind], ""))
+
+
 def exact_diff(a: Artifact, b: Artifact) -> bool:
-    return a.content != b.content
+    return artifact_text(a) != artifact_text(b)
 
 
 def judge_diff(a: Artifact, b: Artifact, llm: LLMClient) -> bool:
@@ -22,18 +28,15 @@ KINDS = ("finding", "plan_step", "executed_step")
 STAGE_ORDER = {kind: i for i, kind in enumerate(KINDS)}
 
 
-def _ordered(graph: ProvenanceGraph, kind: str) -> list[Artifact]:
-    items = [a for a in graph.artifacts.values() if a.kind == kind]
-    if kind == "plan_step":
-        return sorted(items, key=lambda a: a.index)
-    return sorted(items, key=lambda a: a.id)
-
-
-def match_by_position(a: ProvenanceGraph, b: ProvenanceGraph) -> list[tuple[Artifact | None, Artifact | None]]:
-    """Pair artifacts of the same kind by position; an unmatched tail pairs with None."""
+def match_artifacts(a: ProvenanceGraph, b: ProvenanceGraph) -> list[tuple[Artifact | None, Artifact | None]]:
+    """Pair artifacts of the same kind by id (ids are deterministic per task and position);
+    an artifact with no partner pairs with None."""
     pairs: list[tuple[Artifact | None, Artifact | None]] = []
     for kind in KINDS:
-        pairs.extend(zip_longest(_ordered(a, kind), _ordered(b, kind)))
+        mine = {x.id: x for x in a.artifacts.values() if x.kind == kind}
+        theirs = {x.id: x for x in b.artifacts.values() if x.kind == kind}
+        for artifact_id in sorted(mine | theirs):
+            pairs.append((mine.get(artifact_id), theirs.get(artifact_id)))
     return pairs
 
 
@@ -44,7 +47,7 @@ def _differs(pair: tuple[Artifact | None, Artifact | None]) -> bool:
 
 def noise_floor(run_a, run_b) -> dict[str, float]:
     """Fraction of positions that differ, per kind, between two runs of the same task."""
-    pairs = match_by_position(run_a.graph, run_b.graph)
+    pairs = match_artifacts(run_a.graph, run_b.graph)
     floor: dict[str, float] = {}
     for kind, key in zip(KINDS, ("findings", "plan_steps", "executed_steps")):
         of_kind = [p for p in pairs if (p[0] or p[1]).kind == kind]

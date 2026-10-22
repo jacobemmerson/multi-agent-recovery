@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from mar.judge import STAGE_ORDER, exact_diff, match_by_position
+from mar.judge import STAGE_ORDER, exact_diff, match_artifacts, noise_floor
 
 
 def taint(declared: set[str], counterfactual: set[str]) -> dict[str, int]:
@@ -26,7 +26,7 @@ def counterfactual_changed(faulted, twin, fault_artifact_id: str) -> set[str]:
     """Faulted-run artifacts at or after the fault's stage whose twin partner differs or is missing."""
     fault_stage = STAGE_ORDER[faulted.graph.artifacts[fault_artifact_id].kind]
     changed = set()
-    for mine, theirs in match_by_position(faulted.graph, twin.graph):
+    for mine, theirs in match_artifacts(faulted.graph, twin.graph):
         if mine is None or mine.id == fault_artifact_id or STAGE_ORDER[mine.kind] < fault_stage:
             continue
         if theirs is None or exact_diff(mine, theirs):
@@ -69,6 +69,22 @@ def bootstrap_ci(values, n: int = 1000, seed: int = 0, level: float = 0.95) -> t
     return (lo, hi)
 
 
+def _with_noise_floor(frame: pd.DataFrame, runs_dir: Path) -> pd.DataFrame:
+    """Clean-vs-clean floor per (task, condition) from the two lowest clean repeats, joined onto every row of that group."""
+    from mar.run import load_run
+
+    clean = frame[frame["fault_id"].isna()]
+    for (task_id, condition), group in clean.groupby(["task_id", "condition"]):
+        if len(group) < 2:
+            continue
+        first, second = group.sort_values("repeat")["run_id"].iloc[:2]
+        floor = noise_floor(load_run(runs_dir / first), load_run(runs_dir / second))
+        mask = (frame["task_id"] == task_id) & (frame["condition"] == condition)
+        for key in ("findings", "plan_steps", "executed_steps"):
+            frame.loc[mask, f"floor_{key}"] = floor[key]
+    return frame
+
+
 def aggregate(runs_dir: Path, out: Path) -> pd.DataFrame:
     """One row per finished run: manifest fields plus result fields. Written to `out` as parquet."""
     rows = []
@@ -83,6 +99,8 @@ def aggregate(runs_dir: Path, out: Path) -> pd.DataFrame:
             manifest["prompt_hashes"] = json.dumps(manifest["prompt_hashes"])
         rows.append(manifest | json.loads(result_path.read_text()))
     frame = pd.DataFrame(rows)
+    if len(frame) and {"task_id", "condition", "fault_id", "repeat"} <= set(frame.columns):
+        frame = _with_noise_floor(frame, runs_dir)
     out.parent.mkdir(parents=True, exist_ok=True)
     frame.to_parquet(out, index=False)
     print(f"aggregated {len(frame)} runs to {out}" + (f", skipped {skipped} unfinished" if skipped else ""))

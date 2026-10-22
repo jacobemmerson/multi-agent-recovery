@@ -46,11 +46,16 @@ def plot_taint(df: pd.DataFrame, out: Path) -> None:
     fig.savefig(out / "taint.png", dpi=150)
 
 
+def baseline_groups(df: pd.DataFrame, metric: str) -> dict[str, list[float]]:
+    """Per condition, the metric over runs whose fault actually applied; unapplied faults are clean runs."""
+    landed = df[df["fault_applied"] == True]  # noqa: E712 -- pandas boolean column with NaNs
+    return {c: g[metric].astype(float).tolist() for c, g in landed.groupby("condition")}
+
+
 def plot_baselines(df: pd.DataFrame, out: Path) -> None:
-    faulted = df[df["fault_id"].notna()]
     fig, axes = plt.subplots(1, 2, figsize=(9, 4))
-    _bar_with_ci(axes[0], {c: g["utility"].astype(float).tolist() for c, g in faulted.groupby("condition")}, "Utility after fault", "pass rate")
-    _bar_with_ci(axes[1], {c: g["llm_calls"].astype(float).tolist() for c, g in faulted.groupby("condition")}, "Cost", "LLM calls per run")
+    _bar_with_ci(axes[0], baseline_groups(df, "utility"), "Utility after an applied fault", "pass rate")
+    _bar_with_ci(axes[1], baseline_groups(df, "llm_calls"), "Cost", "LLM calls per run")
     fig.tight_layout()
     fig.savefig(out / "baselines.png", dpi=150)
 
