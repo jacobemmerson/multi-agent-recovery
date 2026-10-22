@@ -25,6 +25,7 @@ from mar.config import ExperimentConfig, TaskSet, load_experiment, load_task_set
 from mar.env import TOOL_ACTION_CLASSES, ActionClass, Env
 from mar.faults import FaultTemplate, inject, load_templates, position_for, templates_hash
 from mar.llm import LLMClient, LLMResponse
+from mar.metrics import taint_for_run
 
 
 @dataclass
@@ -207,6 +208,7 @@ class Checkpoint:
     stage: Literal["findings", "plan"]
     artifacts: list[Artifact]
     snapshot: TaskEnvironment
+    trace: list = field(default_factory=list)
 
 
 @dataclass
@@ -258,17 +260,30 @@ def run_pipeline(
     inputs = {"task_id": task_id, "prompt": env.prompt}
     result = PipelineResult(output="", utility=False, llm_calls=0, plan_retries=0)
 
-    research_runtime = EnvToolRuntime(env, f"{task_id}:research", on_action=record.add_tool_action, allowed=read_only_tools(env))
-    findings = Researcher().run(inputs, recording, research_runtime)
-    findings = _maybe_inject(fault, "finding", findings, env, record, task_id, result, stage_name="findings")
-    for finding in findings:
-        record.add_artifact(finding)
+    if checkpoint is not None:
+        env.restore(checkpoint.snapshot)
+        env.trace = list(checkpoint.trace)
+        findings = [a for a in checkpoint.artifacts if a.kind == "finding"]
+        steps = [a for a in checkpoint.artifacts if a.kind == "plan_step"]
+        for artifact in checkpoint.artifacts:
+            record.add_artifact(artifact.model_copy(deep=True))
+    else:
+        findings, steps = [], []
 
-    steps = Planner().run({**inputs, "findings": findings}, recording)
-    plan_retries = steps[0].content["retries"] if steps else 0
-    steps = _maybe_inject(fault, "plan_step", steps, env, record, task_id, result, stage_name="plan")
-    for step in steps:
-        record.add_artifact(step)
+    if checkpoint is None:
+        research_runtime = EnvToolRuntime(env, f"{task_id}:research", on_action=record.add_tool_action, allowed=read_only_tools(env))
+        findings = Researcher().run(inputs, recording, research_runtime)
+        findings = _maybe_inject(fault, "finding", findings, findings, env, record, task_id, result, stage_name="findings")
+        for finding in findings:
+            record.add_artifact(finding)
+
+    plan_retries = 0
+    if checkpoint is None or checkpoint.stage == "findings":
+        steps = Planner().run({**inputs, "findings": findings}, recording)
+        plan_retries = steps[0].content["retries"] if steps else 0
+        steps = _maybe_inject(fault, "plan_step", steps, findings + steps, env, record, task_id, result, stage_name="plan")
+        for step in steps:
+            record.add_artifact(step)
 
     by_id = {f.id: f for f in findings}
     outputs = []
@@ -294,6 +309,7 @@ def _maybe_inject(
     fault: tuple[FaultTemplate, int] | None,
     stage: str,
     artifacts: list[Any],
+    checkpoint_artifacts: list[Any],
     env: Env,
     record: RunRecord,
     task_id: str,
@@ -304,7 +320,9 @@ def _maybe_inject(
     if fault is None or fault[0].stage != stage:
         return artifacts
     template, seed = fault
-    result.checkpoint_before_fault = Checkpoint(stage_name, [a.model_copy(deep=True) for a in artifacts], env.snapshot())
+    result.checkpoint_before_fault = Checkpoint(
+        stage_name, [a.model_copy(deep=True) for a in checkpoint_artifacts], env.snapshot(), list(env.trace)
+    )
     position = position_for(template.id, task_id, seed, len(artifacts))
     injected, applied = inject(template, artifacts, position)
     changed = [a for a in injected if a.content.get("fault") == template.id]
@@ -346,6 +364,35 @@ def expand_jobs(config: ExperimentConfig, tasks: TaskSet, templates: list[FaultT
     return jobs
 
 
+def _result_dict(record: RunRecord, result: PipelineResult, started: float) -> dict[str, Any]:
+    actions = record.graph.tool_actions.values()
+    return {
+        "utility": result.utility,
+        "llm_calls": result.llm_calls,
+        "plan_retries": result.plan_retries,
+        "tool_calls": len(record.graph.tool_actions),
+        "unauthorized_actions": sum(not a.authorized for a in actions),
+        "irreversible_actions": sum(a.action_class == ActionClass.IRREVERSIBLE.value for a in actions),
+        "seconds": round(time.perf_counter() - started, 1),
+        "fault_applied": result.fault_applied,
+        "fault_artifact_id": result.fault_artifact_id,
+    }
+
+
+def fork_twin(parent: RunRecord, checkpoint: Checkpoint, env: Env, llm: LLMClient, config: ExperimentConfig, runs_dir: Path) -> RunRecord:
+    """Counterfactual run sharing every artifact before the injection point."""
+    manifest = dict(parent.manifest)
+    manifest.update(
+        run_id=parent.run_id + "-twin", condition="twin", fault_id=None,
+        parent_run_id=parent.run_id, branch_point=checkpoint.stage,
+    )
+    record = RunRecord.start(runs_dir, manifest)
+    started = time.perf_counter()
+    result = run_pipeline(env, llm, record, parent.manifest["task_id"], checkpoint=checkpoint)
+    record.finish(_result_dict(record, result, started))
+    return record
+
+
 def run_job(job: Job, config: ExperimentConfig, tasks: TaskSet, llm: LLMClient, runs_dir: Path, templates: list[FaultTemplate]) -> RunRecord:
     env = Env(job.suite, job.task_id, tasks.benchmark_version)
     manifest = build_manifest(
@@ -357,21 +404,11 @@ def run_job(job: Job, config: ExperimentConfig, tasks: TaskSet, llm: LLMClient, 
     by_id = {t.id: t for t in templates}
     fault = (by_id[job.fault_id], job.seed) if job.fault_id else None
     result = run_pipeline(env, llm, record, job.task_id, fault=fault)
-    actions = record.graph.tool_actions.values()
-    record.finish(
-        {
-            "utility": result.utility,
-            "llm_calls": result.llm_calls,
-            "plan_retries": result.plan_retries,
-            "tool_calls": len(record.graph.tool_actions),
-            "unauthorized_actions": sum(not a.authorized for a in actions),
-            "irreversible_actions": sum(a.action_class == ActionClass.IRREVERSIBLE.value for a in actions),
-            "seconds": round(time.perf_counter() - started, 1),
-            "fault_applied": result.fault_applied,
-            "fault_artifact_id": result.fault_artifact_id,
-            "ignored": None,
-        }
-    )
+    summary = _result_dict(record, result, started)
+    if fault and job.condition == "none" and result.fault_applied and result.checkpoint_before_fault:
+        twin = fork_twin(record, result.checkpoint_before_fault, env, llm, config, runs_dir)
+        summary.update(taint_for_run(record, twin))
+    record.finish(summary)
     return record
 
 

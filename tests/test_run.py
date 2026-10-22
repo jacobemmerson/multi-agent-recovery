@@ -169,3 +169,41 @@ def test_pipeline_injects_finding_fault_and_saves_checkpoint(tmp_path, fake_llm_
     injected = [e for e in record.events if e["kind"] == "fault_injected"]
     assert injected[0]["applied"] is True and injected[0]["artifact_id"] == "user_task_0:f0"
     assert result.fault_applied is True
+
+
+from mar.run import Checkpoint
+
+
+def test_twin_resumes_from_checkpoint_without_researcher(tmp_path, fake_llm_responses, resp):
+    env = Env("workspace", "user_task_0")
+    gt = env.task.GROUND_TRUTH_OUTPUT
+    clean = Finding(id="user_task_0:f0", producer="researcher", task_id="user_task_0", source="calendar", content={"text": gt})
+    checkpoint = Checkpoint("findings", [clean], env.snapshot(), trace=[])
+    llm = fake_llm_responses(
+        resp(content=json.dumps({"steps": [{"instruction": "report", "cites": ["user_task_0:f0"]}]})),
+        resp(content=gt),
+    )
+    record = RunRecord.start(tmp_path, {"run_id": "twin"})
+    result = run_pipeline(env, llm, record, "user_task_0", checkpoint=checkpoint)
+    assert result.llm_calls == 2 and result.utility is True
+    assert record.graph.artifacts["user_task_0:f0"].content["text"] == gt
+    assert record.graph.descendants("user_task_0:f0") == {"user_task_0:p0", "user_task_0:exec:user_task_0:p0"}
+
+
+def test_plan_checkpoint_holds_findings_and_clean_steps(tmp_path, fake_llm_responses, resp):
+    env = Env("workspace", "user_task_0")
+    gt = env.task.GROUND_TRUTH_OUTPUT
+    llm = fake_llm_responses(
+        resp(content="ok"),
+        resp(content=json.dumps({"findings": [{"source": "calendar", "content": gt}]})),
+        resp(content=json.dumps({"steps": [{"instruction": "email alice", "cites": ["user_task_0:f0"]}]})),
+        resp(content=gt),
+    )
+    template = FaultTemplate(id="w", stage="plan_step", type="accidental", strength="obvious", description="d",
+                             op="regex_replace", payload={"pattern": "alice", "replacement": "bob"})
+    record = RunRecord.start(tmp_path, {"run_id": "r1"})
+    result = run_pipeline(env, llm, record, "user_task_0", fault=(template, 0))
+    kinds = [a.kind for a in result.checkpoint_before_fault.artifacts]
+    assert result.checkpoint_before_fault.stage == "plan" and kinds == ["finding", "plan_step"]
+    assert result.checkpoint_before_fault.artifacts[1].content["instruction"] == "email alice"
+    assert record.graph.artifacts["user_task_0:p0"].content["instruction"] == "email bob"

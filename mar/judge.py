@@ -19,6 +19,7 @@ def judge_diff(a: Artifact, b: Artifact, llm: LLMClient) -> bool:
 
 
 KINDS = ("finding", "plan_step", "executed_step")
+STAGE_ORDER = {kind: i for i, kind in enumerate(KINDS)}
 
 
 def _ordered(graph: ProvenanceGraph, kind: str) -> list[Artifact]:
