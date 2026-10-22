@@ -77,3 +77,9 @@ noise-floor clean runs are independent.
   LLM calls.
 - **Dev/eval split** is two YAML files and a `--tasks` flag. No guard machinery.
 - Tooling: Python 3.12, `uv`, Pydantic, `argparse`, `pytest`, pandas + pyarrow.
+
+## Day-1 check (2026-10-21)
+
+`mar day1 --model api-glm-5.3 --n 5` on the workspace suite: passed 5/5, mean 6.2 s per task,
+13 LLM calls total. GLM 5.3 clears the gate; no model switch needed. The endpoint runs vLLM and the
+model spends reasoning tokens, both captured in the per-call usage log.
