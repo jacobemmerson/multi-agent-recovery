@@ -24,6 +24,7 @@ class ExperimentConfig(BaseModel):
     repeats: int = 3
     conditions: list[str]
     fault_templates: Path = Path("data/fault_templates")
+    benchmark_version: str = "v1.2"
     detection_delays: list[int | str] = [0]
 
 

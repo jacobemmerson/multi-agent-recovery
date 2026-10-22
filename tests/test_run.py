@@ -69,3 +69,34 @@ def test_researcher_runtime_blocks_non_read_only_tools():
     assert [s["function"]["name"] for s in rt.tool_schemas()] == ["get_current_day"]
     assert rt.call("send_email", {"recipients": [], "subject": "", "body": ""}).status == "blocked"
     assert len(env.environment.inbox.sent) == len(env.pre_environment.inbox.sent)
+
+
+from mar.artifacts import Finding
+from mar.config import ExperimentConfig, ModelConfig
+from mar.run import build_manifest, load_run
+
+
+def cfg():
+    return ExperimentConfig(name="p1", model=ModelConfig(name="api-glm-5.3"), tasks="configs/dev_tasks.yaml", conditions=["none"])
+
+
+def test_manifest_has_every_pinned_field():
+    m = build_manifest(cfg(), run_id="r", suite="workspace", task_id="user_task_0", condition="none", fault_id=None, repeat=0, seed=7)
+    assert set(m) == {
+        "run_id", "experiment", "suite", "task_id", "condition", "fault_id", "repeat", "seed", "model",
+        "benchmark_version", "git_sha", "templates_hash", "prompt_hashes", "parent_run_id", "branch_point", "started_at",
+    }
+    assert m["model"] == "api-glm-5.3" and len(m["templates_hash"]) == 64 and "executor" in m["prompt_hashes"]
+    assert m["parent_run_id"] is None and m["seed"] == 7
+
+
+def test_run_round_trips_through_disk(tmp_path):
+    manifest = build_manifest(cfg(), run_id="r1", suite="workspace", task_id="t", condition="none", fault_id=None, repeat=0, seed=1)
+    record = RunRecord.start(tmp_path, manifest)
+    record.add_artifact(Finding(id="t:f0", producer="researcher", task_id="t", source="s"))
+    record.finish({"utility": True})
+    loaded = load_run(tmp_path / "r1")
+    assert loaded.manifest["run_id"] == "r1" and loaded.result == {"utility": True}
+    assert "t:f0" in loaded.graph.artifacts and loaded.events[0]["kind"] == "artifact"
+    assert loaded.graph.artifacts["t:f0"].kind == "finding"
+    assert (tmp_path / "r1" / "artifacts" / "t:f0.json").exists()

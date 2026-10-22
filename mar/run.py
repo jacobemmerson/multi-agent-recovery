@@ -6,8 +6,10 @@ runs/<run_id>/. fork_twin starts a counterfactual run from a pre-injection snaps
 """
 
 import json
+import subprocess
 import time
 from collections.abc import Callable
+from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -16,10 +18,11 @@ from typing import Literal
 
 from agentdojo.functions_runtime import TaskEnvironment
 
-from mar.agents import Executor, Planner, Researcher, ToolResult, load_prompt, tool_loop
+from mar.agents import Executor, Planner, Researcher, ToolResult, load_prompt, prompt_hashes, tool_loop
 from mar.artifacts import Artifact, Finding, PlanStep, ProvenanceGraph, ToolAction
 from mar.config import ExperimentConfig
 from mar.env import TOOL_ACTION_CLASSES, ActionClass, Env
+from mar.faults import templates_hash
 from mar.llm import LLMClient, LLMResponse
 
 
@@ -30,6 +33,7 @@ class RunRecord:
     manifest: dict[str, Any]
     graph: ProvenanceGraph = field(default_factory=ProvenanceGraph)
     events: list[dict[str, Any]] = field(default_factory=list)
+    result: dict[str, Any] | None = None
 
     @classmethod
     def start(cls, runs_dir: Path, manifest: dict[str, Any]) -> "RunRecord":
@@ -53,8 +57,68 @@ class RunRecord:
             handle.write(json.dumps(event) + "\n")
 
     def finish(self, result: dict[str, Any]) -> None:
+        self.result = result
         (self.directory / "provenance.json").write_text(self.graph.model_dump_json(indent=2))
-        (self.directory / "result.json").write_text(json.dumps(result, indent=2))
+        artifacts_dir = self.directory / "artifacts"
+        artifacts_dir.mkdir(exist_ok=True)
+        for artifact in self.graph.artifacts.values():
+            (artifacts_dir / f"{artifact.id}.json").write_text(artifact.model_dump_json(indent=2))
+        (self.directory / "result.json").write_text(json.dumps(result, indent=2, default=str))
+
+
+def load_run(directory: Path) -> RunRecord:
+    manifest = json.loads((directory / "manifest.json").read_text())
+    record = RunRecord(manifest["run_id"], directory, manifest)
+    events_path = directory / "events.jsonl"
+    if events_path.exists():
+        record.events = [json.loads(line) for line in events_path.read_text().splitlines() if line]
+    provenance_path = directory / "provenance.json"
+    if provenance_path.exists():
+        record.graph = ProvenanceGraph.model_validate_json(provenance_path.read_text())
+    result_path = directory / "result.json"
+    if result_path.exists():
+        record.result = json.loads(result_path.read_text())
+    return record
+
+
+def git_sha() -> str:
+    try:
+        return subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return "unknown"
+
+
+def build_manifest(
+    config: ExperimentConfig,
+    *,
+    run_id: str,
+    suite: str,
+    task_id: str,
+    condition: str,
+    fault_id: str | None,
+    repeat: int,
+    seed: int,
+    parent_run_id: str | None = None,
+    branch_point: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "run_id": run_id,
+        "experiment": config.name,
+        "suite": suite,
+        "task_id": task_id,
+        "condition": condition,
+        "fault_id": fault_id,
+        "repeat": repeat,
+        "seed": seed,
+        "model": config.model.name,
+        "benchmark_version": config.benchmark_version,
+        "git_sha": git_sha(),
+        "templates_hash": templates_hash(config.fault_templates),
+        "prompt_hashes": prompt_hashes(),
+        "parent_run_id": parent_run_id,
+        "branch_point": branch_point,
+        "started_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
 
 
 class EnvToolRuntime:

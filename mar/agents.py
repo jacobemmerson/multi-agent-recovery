@@ -6,6 +6,7 @@ Phase 1 uses plain OpenAI-shaped messages; AgentDojo ChatMessage compatibility i
 deferred to the Phase 2 built-in-defenses baseline.
 """
 
+import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,6 +20,10 @@ PROMPTS_DIR = Path(__file__).parent / "prompts"
 
 def load_prompt(name: str) -> str:
     return (PROMPTS_DIR / f"{name}.md").read_text()
+
+
+def prompt_hashes() -> dict[str, str]:
+    return {path.stem: hashlib.sha256(path.read_bytes()).hexdigest() for path in sorted(PROMPTS_DIR.glob("*.md"))}
 
 
 @dataclass
