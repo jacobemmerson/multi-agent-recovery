@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from mar.judge import STAGE_ORDER, exact_diff, match_artifacts, noise_floor
+from mar.judge import STAGE_ORDER, Differs, exact_diff, match_artifacts, noise_floor
 
 
 def taint(declared: set[str], counterfactual: set[str]) -> dict[str, int]:
@@ -22,22 +22,22 @@ def taint(declared: set[str], counterfactual: set[str]) -> dict[str, int]:
     }
 
 
-def counterfactual_changed(faulted, twin, fault_artifact_id: str) -> set[str]:
+def counterfactual_changed(faulted, twin, fault_artifact_id: str, differs: Differs = exact_diff) -> set[str]:
     """Faulted-run artifacts at or after the fault's stage whose twin partner differs or is missing."""
     fault_stage = STAGE_ORDER[faulted.graph.artifacts[fault_artifact_id].kind]
     changed = set()
     for mine, theirs in match_artifacts(faulted.graph, twin.graph):
         if mine is None or mine.id == fault_artifact_id or STAGE_ORDER[mine.kind] < fault_stage:
             continue
-        if theirs is None or exact_diff(mine, theirs):
+        if theirs is None or differs(mine, theirs):
             changed.add(mine.id)
     return changed
 
 
-def taint_for_run(faulted, twin) -> dict:
+def taint_for_run(faulted, twin, differs: Differs = exact_diff) -> dict:
     fault_id = next(e["artifact_id"] for e in faulted.events if e["kind"] == "fault_injected")
     declared = faulted.graph.descendants(fault_id)
-    changed = counterfactual_changed(faulted, twin, fault_id)
+    changed = counterfactual_changed(faulted, twin, fault_id, differs)
     return taint(declared, changed) | {
         "declared_descendants": len(declared),
         "counterfactual_changed": len(changed),

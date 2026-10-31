@@ -48,3 +48,12 @@ def test_bootstrap_ci_brackets_mean():
     lo, hi = bootstrap_ci([0, 1, 1, 1, 0, 1])
     assert lo <= 4 / 6 <= hi and lo >= 0 and hi <= 1
     assert bootstrap_ci([]) == (float("nan"), float("nan")) or all(x != x for x in bootstrap_ci([]))
+
+
+def test_taint_for_run_accepts_custom_differs(build_run):
+    faulted = build_run("a", ["x'", "y"], [("s1", ["t:f0"]), ("s2", ["t:f1"])], ["e1", "e2'"], fault_artifact_id="t:f0")
+    twin = build_run("b", ["x", "y"], [("s1", ["t:f0"]), ("s2'", ["t:f1"])], ["e1", "e2"])
+    never = taint_for_run(faulted, twin, differs=lambda a, b: False)
+    assert never["counterfactual_changed"] == 0 and never["ignored"] is True
+    always = taint_for_run(faulted, twin, differs=lambda a, b: True)
+    assert always["counterfactual_changed"] == 5  # every artifact but the fault itself

@@ -4,6 +4,10 @@ AgentDojo checkers judge final state only, so intermediate artifacts need their 
 Every propagation or divergence number is read against the clean-vs-clean noise floor.
 """
 
+import json
+from typing import Any, Callable
+
+from mar.agents import load_prompt
 from mar.artifacts import Artifact, ProvenanceGraph
 from mar.llm import LLMClient
 
@@ -20,8 +24,35 @@ def exact_diff(a: Artifact, b: Artifact) -> bool:
     return artifact_text(a) != artifact_text(b)
 
 
-def judge_diff(a: Artifact, b: Artifact, llm: LLMClient) -> bool:
-    raise NotImplementedError
+Differs = Callable[[Artifact, Artifact], bool]
+
+JUDGE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {"same": {"type": "boolean"}, "reason": {"type": "string"}},
+    "required": ["same", "reason"],
+    "additionalProperties": False,
+}
+
+
+def judge_verdict(a: Artifact, b: Artifact, llm: LLMClient, task_prompt: str = "") -> dict[str, Any]:
+    """One judge call; a malformed verdict counts as a difference so a judge outage never hides propagation."""
+    user = (
+        f"Task given to the pipeline:\n{task_prompt}\n\n"
+        f"Artifact kind: {a.kind}\n\n"
+        f"Artifact A:\n{artifact_text(a)}\n\n"
+        f"Artifact B:\n{artifact_text(b)}"
+    )
+    messages = [{"role": "system", "content": load_prompt("judge")}, {"role": "user", "content": user}]
+    response = llm.complete(messages, schema=JUDGE_SCHEMA)
+    try:
+        verdict = json.loads(response.content or "")
+        return {"differs": not bool(verdict["same"]), "reason": str(verdict.get("reason", ""))}
+    except (json.JSONDecodeError, KeyError, TypeError) as error:
+        return {"differs": True, "reason": f"judge_error: {type(error).__name__}: {response.content!r}"}
+
+
+def judge_diff(a: Artifact, b: Artifact, llm: LLMClient, task_prompt: str = "") -> bool:
+    return judge_verdict(a, b, llm, task_prompt)["differs"]
 
 
 KINDS = ("finding", "plan_step", "executed_step")
@@ -40,18 +71,18 @@ def match_artifacts(a: ProvenanceGraph, b: ProvenanceGraph) -> list[tuple[Artifa
     return pairs
 
 
-def _differs(pair: tuple[Artifact | None, Artifact | None]) -> bool:
+def pair_differs(pair: tuple[Artifact | None, Artifact | None], differs: Differs = exact_diff) -> bool:
     x, y = pair
-    return x is None or y is None or exact_diff(x, y)
+    return x is None or y is None or differs(x, y)
 
 
-def noise_floor(run_a, run_b) -> dict[str, float]:
+def noise_floor(run_a, run_b, differs: Differs = exact_diff) -> dict[str, float]:
     """Fraction of positions that differ, per kind, between two runs of the same task."""
     pairs = match_artifacts(run_a.graph, run_b.graph)
     floor: dict[str, float] = {}
     for kind, key in zip(KINDS, ("findings", "plan_steps", "executed_steps")):
         of_kind = [p for p in pairs if (p[0] or p[1]).kind == kind]
-        floor[key] = sum(map(_differs, of_kind)) / len(of_kind) if of_kind else 0.0
+        floor[key] = sum(pair_differs(p, differs) for p in of_kind) / len(of_kind) if of_kind else 0.0
     tools_a = [t.tool for t in sorted(run_a.graph.tool_actions.values(), key=lambda t: t.id)]
     tools_b = [t.tool for t in sorted(run_b.graph.tool_actions.values(), key=lambda t: t.id)]
     floor["tool_sequence_differs"] = tools_a != tools_b
