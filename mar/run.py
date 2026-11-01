@@ -437,8 +437,10 @@ def expand_jobs(config: ExperimentConfig, tasks: TaskSet, templates: list[FaultT
     jobs = []
     for suite, task_ids in sorted(tasks.suites.items()):
         for task_id in task_ids:
-            for repeat in range(config.repeats):
+            for repeat in range(max(map(config.repeats_for, config.conditions))):
                 for condition in config.conditions:
+                    if repeat >= config.repeats_for(condition):
+                        continue
                     jobs.append(Job(suite, task_id, condition, None, repeat))
                     jobs.extend(Job(suite, task_id, condition, t.id, repeat) for t in phase1_templates)
     return jobs

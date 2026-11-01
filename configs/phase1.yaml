@@ -1,10 +1,11 @@
-# Call budget: tasks x repeats x (conditions x (1 clean + templates) + templates twins) runs x ~8 calls.
-# 20 x 3 x (4 x 13 + 12) = 3840 runs, ~30k calls as configured; trim conditions or repeats before a full run.
+# Budget (measured on runs/live8, api-glm-5.3: ~8.5 calls and ~8 s per `none` run, ~3.5 calls per twin):
+# per task, `none` runs 3 x (1 clean + 12 faults) + ~30 twins = 69 runs ~ 590 calls; each baseline 13 runs
+# at ~12-16 calls ~ 180 calls. 20 tasks -> 1,560 jobs (+ ~600 twins), ~23k calls, ~7 h sequential.
 name: phase1
 model: {name: api-glm-5.3, temperature: 0.0, max_tokens: 4096}
 tasks: configs/dev_tasks.yaml
-repeats: 3
-# Each task also runs clean twice for the noise floor, plus a counterfactual twin per fault.
+repeats: 3                 # `none`: 3 repeats give the clean-vs-clean noise floor and per-fault twins
+condition_repeats: {restart_scratch: 1, restart_stage: 1, always_verify: 1}
 conditions: [none, restart_scratch, restart_stage, always_verify]
 fault_templates: data/fault_templates
-detection_delays: [all]   # Phase 1 never reveals the fault; propagation only
+detection_delays: [all]   # Phase 1 never reveals the fault before the end; propagation only

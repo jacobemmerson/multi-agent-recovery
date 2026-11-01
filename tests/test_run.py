@@ -275,3 +275,15 @@ def test_always_verify_regenerates_a_rejected_artifact(tmp_path, fake_llm_respon
     record = RunRecord.start(tmp_path, {"run_id": "r1"})
     result = run_pipeline(env, llm, record, "user_task_0", policy=AlwaysVerify())
     assert result.verifier_rejections == 1 and result.llm_calls == 9 and result.utility is True
+
+
+def test_condition_repeats_override_default():
+    import pytest
+
+    tasks = TaskSet(suites={"workspace": ["user_task_0"]})
+    config = cfg().model_copy(update={"repeats": 3, "conditions": ["none", "restart_stage"], "condition_repeats": {"restart_stage": 1}})
+    assert config.repeats_for("none") == 3 and config.repeats_for("restart_stage") == 1
+    jobs = expand_jobs(config, tasks, templates=[])
+    assert [(j.condition, j.repeat) for j in jobs] == [("none", 0), ("restart_stage", 0), ("none", 1), ("none", 2)]
+    with pytest.raises(ValueError, match="restart_scratch"):
+        ExperimentConfig(name="p", model=ModelConfig(name="m"), tasks="t", conditions=["none"], condition_repeats={"restart_scratch": 1})
