@@ -50,3 +50,16 @@ def test_schema_is_sent_as_strict_json_schema():
     rf = fake.last_kwargs["response_format"]
     assert rf["type"] == "json_schema" and rf["json_schema"]["strict"] is True
     assert "tools" not in fake.last_kwargs
+
+
+def test_real_client_is_built_with_a_request_timeout_and_retries(monkeypatch):
+    import openai
+
+    from mar.llm import REQUEST_TIMEOUT_SECONDS
+
+    seen = {}
+    monkeypatch.setattr(openai, "OpenAI", lambda **kwargs: seen.update(kwargs) or "client")
+    monkeypatch.setenv("BASE_URL", "http://x")
+    monkeypatch.setenv("TRITONAI_API_KEY", "k")
+    assert OpenAICompatibleClient("m").client == "client"
+    assert seen["timeout"] == REQUEST_TIMEOUT_SECONDS == 120 and seen["max_retries"] == 3

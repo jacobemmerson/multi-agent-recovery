@@ -102,7 +102,7 @@ def test_judge_runs_writes_judge_json_and_skips_done(tmp_path, build_run, fake_l
     llm = fake_llm_responses(*[resp(content=same)] * 10)
     counts = judge_runs(runs, llm, task_prompt_for=lambda suite, task_id: "prompt")
     # clean pair: 3 artifacts; twin pair: 2 artifacts after the fault (the fault itself is excluded)
-    assert counts == {"pairs": 2, "artifacts_judged": 5, "skipped": 0} and len(llm.calls) == 5
+    assert counts == {"pairs": 2, "artifacts_judged": 5, "skipped": 0, "identical": 0} and len(llm.calls) == 5
     judged = load_judgments(runs / "workspace-t-none-date-r0")
     assert set(judged) == {"t:p0", "t:exec:t:p0"} and judged["t:p0"] is False
     again = judge_runs(runs, llm, task_prompt_for=lambda suite, task_id: "prompt")
@@ -143,3 +143,15 @@ def test_sample_has_n_rows_and_empty_hand_column(tmp_path, build_run, fake_llm_r
     assert len(sample) == 3 and list(sample.columns) == ["run_id", "artifact_id", "kind", "text_a", "text_b", "judge_differs", "hand_differs"]
     assert (sample["hand_differs"] == "").all() and sample["judge_differs"].all()
     assert sample.equals(sample_for_hand_labels(runs, n=3, seed=0))
+
+
+def test_identical_texts_are_not_sent_to_the_judge(tmp_path, build_run, fake_llm_responses, resp):
+    build = lambda name, text: build_run(name, [text], [("s", ["t:f0"])], ["e"])  # noqa: E731
+    for name, repeat in (("workspace-t-none-clean-r0", 0), ("workspace-t-none-clean-r1", 1)):
+        record = build(name, "same finding")
+        record.manifest.update(task_id="t", condition="none", fault_id=None, repeat=repeat, suite="workspace")
+        record.finish({"utility": True})
+    llm = fake_llm_responses()
+    counts = judge_runs(tmp_path, llm, task_prompt_for=lambda suite, task_id: "p")
+    assert counts == {"pairs": 1, "artifacts_judged": 0, "skipped": 0, "identical": 3} and llm.calls == []
+    assert load_judgments(tmp_path / "workspace-t-none-clean-r0") == {"t:f0": False, "t:p0": False, "t:exec:t:p0": False}

@@ -63,7 +63,7 @@ def _judge(args: argparse.Namespace) -> None:
     from mar.llm import OpenAICompatibleClient
 
     counts = judge_runs(args.runs_dir, OpenAICompatibleClient.from_config(ModelConfig(name=args.model)), rejudge=args.rejudge)
-    print(f"judged {counts['artifacts_judged']} artifacts across {counts['pairs']} pairs, skipped {counts['skipped']} already judged")
+    print(f"judged {counts['artifacts_judged']} artifacts across {counts['pairs']} pairs, {counts['identical']} identical, skipped {counts['skipped']} already judged")
     if args.sample:
         sample = sample_for_hand_labels(args.runs_dir, n=args.sample)
         args.out.parent.mkdir(parents=True, exist_ok=True)

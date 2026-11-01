@@ -157,7 +157,7 @@ def judge_runs(
     """Judge every pair from `pairs_to_judge`, writing judge.json after each pair so the batch resumes."""
     from mar.run import load_run
 
-    counts = {"pairs": 0, "artifacts_judged": 0, "skipped": 0}
+    counts = {"pairs": 0, "artifacts_judged": 0, "skipped": 0, "identical": 0}
     prompts: dict[tuple[str, str], str] = {}
     for left_dir, right_dir in pairs_to_judge(runs_dir):
         left, right = load_run(left_dir), load_run(right_dir)
@@ -169,9 +169,12 @@ def judge_runs(
         for a, b in _judgeable(left, right):
             if a.id in judgments:
                 counts["skipped"] += 1
-                continue
-            judgments[a.id] = judge_verdict(a, b, llm, prompts[key])
-            counts["artifacts_judged"] += 1
+            elif not exact_diff(a, b):
+                judgments[a.id] = {"differs": False, "reason": "identical text"}
+                counts["identical"] += 1
+            else:
+                judgments[a.id] = judge_verdict(a, b, llm, prompts[key])
+                counts["artifacts_judged"] += 1
         path.write_text(json.dumps(judgments, indent=1))
     return counts
 
