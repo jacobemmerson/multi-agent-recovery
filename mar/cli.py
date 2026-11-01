@@ -13,6 +13,7 @@ def main(argv: list[str] | None = None) -> None:
     run.add_argument("--tasks", choices=["dev", "eval"], default="dev")
     run.add_argument("--resume", action="store_true")
     run.add_argument("--runs-dir", type=Path, default=Path("runs"))
+    run.add_argument("--workers", type=int, default=1, help="concurrent jobs; TritonAI throughput saturates near 4")
 
     judge = sub.add_parser("judge", help="LLM-judge twin and clean-repeat pairs; writes judge.json per run")
     judge.add_argument("--runs-dir", type=Path, default=Path("runs"))
@@ -54,7 +55,7 @@ def _day1(args: argparse.Namespace) -> None:
 def _run(args: argparse.Namespace) -> None:
     from mar.run import run_experiment
 
-    run_experiment(args.config, args.tasks, args.runs_dir, args.resume)
+    run_experiment(args.config, args.tasks, args.runs_dir, args.resume, workers=args.workers)
 
 
 def _judge(args: argparse.Namespace) -> None:

@@ -6,6 +6,7 @@ runs/<run_id>/. fork_twin starts a counterfactual run from a pre-injection snaps
 """
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 import subprocess
 import time
 import zlib
@@ -522,6 +523,7 @@ def run_experiment(
     runs_dir: Path,
     resume: bool,
     llm: LLMClient | None = None,
+    workers: int = 1,
 ) -> list[Path]:
     config = load_experiment(config_path)
     task_set = load_task_set(Path(config.tasks) if tasks == "dev" else Path("configs/eval_tasks.yaml"))
@@ -533,17 +535,27 @@ def run_experiment(
         from mar.llm import OpenAICompatibleClient
 
         llm = OpenAICompatibleClient.from_config(config.model)
-    directories = []
-    for n, job in enumerate(jobs, 1):
+    def run_one(numbered: tuple[int, Job]) -> Path:
+        n, job = numbered
         directory = runs_dir / job.run_id
         if resume and (directory / "result.json").exists() and "error" not in json.loads((directory / "result.json").read_text()):
-            print(f"[{n}/{len(jobs)}] {job.run_id} skipped (done)")
-        else:
-            try:
-                record = run_job(job, config, task_set, llm, runs_dir, templates)
-                print(f"[{n}/{len(jobs)}] {job.run_id} utility={record.result['utility']} llm={record.result['llm_calls']} {record.result['seconds']}s")
-            except Exception as error:
-                _write_error_result(job, config, runs_dir, error)
-                print(f"[{n}/{len(jobs)}] {job.run_id} ERROR {type(error).__name__}: {error}")
-        directories.append(directory)
-    return directories
+            print(f"[{n}/{len(jobs)}] {job.run_id} skipped (done)", flush=True)
+            return directory
+        try:
+            record = run_job(job, config, task_set, llm, runs_dir, templates)
+            print(f"[{n}/{len(jobs)}] {job.run_id} utility={record.result['utility']} llm={record.result['llm_calls']} {record.result['seconds']}s", flush=True)
+        except Exception as error:
+            _write_error_result(job, config, runs_dir, error)
+            print(f"[{n}/{len(jobs)}] {job.run_id} ERROR {type(error).__name__}: {error}", flush=True)
+        return directory
+
+    return run_jobs(list(enumerate(jobs, 1)), run_one, workers)
+
+
+def run_jobs(jobs: list, work: Callable[[Any], Any], workers: int) -> list:
+    """Run `work` over `jobs` on a thread pool; results come back in job order. Jobs share only the LLM
+    client, which is thread-safe; every job builds its own Env and RunRecord."""
+    if workers <= 1:
+        return [work(job) for job in jobs]
+    with ThreadPoolExecutor(workers) as pool:
+        return list(pool.map(work, jobs))

@@ -287,3 +287,39 @@ def test_condition_repeats_override_default():
     assert [(j.condition, j.repeat) for j in jobs] == [("none", 0), ("restart_stage", 0), ("none", 1), ("none", 2)]
     with pytest.raises(ValueError, match="restart_scratch"):
         ExperimentConfig(name="p", model=ModelConfig(name="m"), tasks="t", conditions=["none"], condition_repeats={"restart_scratch": 1})
+
+
+def test_run_jobs_in_parallel_returns_results_in_job_order():
+    import threading
+    import time
+
+    from mar.run import run_jobs
+
+    seen, lock = [], threading.Lock()
+
+    def work(job):
+        time.sleep(0.01 * (5 - job))  # later jobs finish first
+        with lock:
+            seen.append(job)
+        return job * 10
+
+    assert run_jobs(list(range(5)), work, workers=3) == [0, 10, 20, 30, 40]
+    assert sorted(seen) == [0, 1, 2, 3, 4] and seen != [0, 1, 2, 3, 4]
+    assert run_jobs([1, 2], work, workers=1) == [10, 20]
+
+
+def test_run_experiment_accepts_workers(tmp_path, fake_llm_responses):
+    tasks_path = tmp_path / "tasks.yaml"
+    tasks_path.write_text(yaml.safe_dump({"benchmark_version": "v1.2", "suites": {"workspace": ["user_task_0"]}}))
+    config_path = tmp_path / "exp.yaml"
+    config_path.write_text(yaml.safe_dump({
+        "name": "smoke", "model": {"name": "fake"}, "tasks": str(tasks_path), "repeats": 2,
+        "conditions": ["none"], "fault_templates": str(tmp_path / "no_templates"),
+    }))
+    (tmp_path / "no_templates").mkdir()
+    for repeat in (0, 1):
+        done = tmp_path / "runs" / f"workspace-user_task_0-none-clean-r{repeat}"
+        done.mkdir(parents=True)
+        (done / "result.json").write_text("{}")
+    paths = run_experiment(config_path, "dev", tmp_path / "runs", resume=True, llm=fake_llm_responses(), workers=2)
+    assert [p.name for p in paths] == ["workspace-user_task_0-none-clean-r0", "workspace-user_task_0-none-clean-r1"]
