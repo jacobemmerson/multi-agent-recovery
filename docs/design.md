@@ -98,7 +98,31 @@ recorded per step and should be watched (proposal risk: "planner does not cite f
 | user_task_17 | 1.00 | 1.00 | 1.00 | True |
 | user_task_13 | 1.00 | 1.00 | 1.00 | True |
 
-Exact diff puts the floor at or near 1.0 for every kind: two clean runs almost never produce byte-identical artifacts. The LLM judge (Phase 1 follow-up) is required before any propagation number is read against this floor.
+Exact diff puts the floor at or near 1.0 for every kind: two clean runs almost never produce byte-identical artifacts, so the LLM judge below is what propagation numbers are read against.
+
+## LLM judge and judged noise floor (2026-10-31, judge api-glm-5.3)
+
+`mar judge --runs-dir <dir>` runs after an experiment, over finished run directories. It pairs each
+applied-fault `none` run with its twin and the two lowest clean repeats per (task, condition), asks the
+judge once per matched artifact pair whether a downstream agent would act the same on either
+(`mar/prompts/judge.md`, strict `{same, reason}` schema), and writes `judge.json` into the left run's
+directory. `mar aggregate` then reports exact and judged numbers side by side (`floor_judged_*`,
+`judged_counterfactual_changed`, `judged_under_taint`, `judged_over_taint`, `judged_ignored`).
+Judgments are cached by design: the no-cache rule protects agent calls, and a judge verdict is a
+measurement that should not change between aggregations. A malformed verdict counts as a difference.
+
+Same smoke runs as above, judged:
+
+| Task | findings | plan steps | executed steps |
+| --- | --- | --- | --- |
+| user_task_0 | 0.00 | 0.00 | 0.00 |
+| user_task_17 | 0.00 | 0.00 | 0.00 |
+| user_task_13 | 0.50 | 0.50 | 0.50 |
+
+The 0.5 on user_task_13 is real: the two clean runs split the sources into findings differently, so
+ids pair different facts, and one run's plan step cites a guidance file the other's does not.
+`mar judge --sample 50` writes judged pairs with an empty `hand_differs` column for the 50-artifact
+agreement check the proposal commits to; `judge.agreement` scores it.
 
 ## Frozen fault templates (2026-10-21)
 

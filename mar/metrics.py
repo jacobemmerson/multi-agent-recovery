@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from mar.judge import STAGE_ORDER, Differs, exact_diff, match_artifacts, noise_floor
+from mar.judge import STAGE_ORDER, Differs, exact_diff, judged_differs, load_judgments, match_artifacts, noise_floor
 
 
 def taint(declared: set[str], counterfactual: set[str]) -> dict[str, int]:
@@ -78,10 +78,31 @@ def _with_noise_floor(frame: pd.DataFrame, runs_dir: Path) -> pd.DataFrame:
         if len(group) < 2:
             continue
         first, second = group.sort_values("repeat")["run_id"].iloc[:2]
-        floor = noise_floor(load_run(runs_dir / first), load_run(runs_dir / second))
+        run_a, run_b = load_run(runs_dir / first), load_run(runs_dir / second)
         mask = (frame["task_id"] == task_id) & (frame["condition"] == condition)
+        floor = noise_floor(run_a, run_b)
         for key in ("findings", "plan_steps", "executed_steps"):
             frame.loc[mask, f"floor_{key}"] = floor[key]
+        judgments = load_judgments(runs_dir / first)
+        if judgments:
+            judged = noise_floor(run_a, run_b, judged_differs(judgments))
+            for key in ("findings", "plan_steps", "executed_steps"):
+                frame.loc[mask, f"floor_judged_{key}"] = judged[key]
+    return frame
+
+
+def _with_judged_taint(frame: pd.DataFrame, runs_dir: Path) -> pd.DataFrame:
+    """Taint recomputed with the judge's verdicts for every faulted `none` run that has judge.json and a twin."""
+    from mar.run import load_run
+
+    for index, row in frame[frame["fault_id"].notna() & (frame["condition"] == "none")].iterrows():
+        judgments = load_judgments(runs_dir / row["run_id"])
+        twin_dir = runs_dir / (row["run_id"] + "-twin")
+        if not judgments or not (twin_dir / "result.json").exists():
+            continue
+        taint = taint_for_run(load_run(runs_dir / row["run_id"]), load_run(twin_dir), judged_differs(judgments))
+        for key in ("counterfactual_changed", "under_taint", "over_taint", "ignored"):
+            frame.loc[index, f"judged_{key}"] = taint[key]
     return frame
 
 
@@ -101,6 +122,7 @@ def aggregate(runs_dir: Path, out: Path) -> pd.DataFrame:
     frame = pd.DataFrame(rows)
     if len(frame) and {"task_id", "condition", "fault_id", "repeat"} <= set(frame.columns):
         frame = _with_noise_floor(frame, runs_dir)
+        frame = _with_judged_taint(frame, runs_dir)
     out.parent.mkdir(parents=True, exist_ok=True)
     frame.to_parquet(out, index=False)
     print(f"aggregated {len(frame)} runs to {out}" + (f", skipped {skipped} unfinished" if skipped else ""))
