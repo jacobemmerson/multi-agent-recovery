@@ -504,17 +504,21 @@ def run_job(job: Job, config: ExperimentConfig, tasks: TaskSet, llm: LLMClient, 
 
 
 def _write_error_result(job: Job, config: ExperimentConfig, runs_dir: Path, error: Exception) -> RunRecord:
-    """A job that raised still gets a result.json, so the batch continues and --resume retries it later."""
+    """A job that raised still gets a result.json, so the batch continues and --resume retries it later.
+    The events the failed run wrote are left in place for diagnosis."""
     manifest = build_manifest(
         config, run_id=job.run_id, suite=job.suite, task_id=job.task_id, condition=job.condition,
         fault_id=job.fault_id, repeat=job.repeat, seed=job.seed,
     )
-    record = RunRecord.start(runs_dir, manifest)
-    record.finish({"utility": False, "llm_calls": 0, "plan_retries": 0, "tool_calls": 0, "unauthorized_actions": 0,
-                   "irreversible_actions": 0, "seconds": 0.0, "fault_applied": None, "fault_artifact_id": None,
-                   "recovered": False, "recovery_llm_calls": 0, "discarded_artifacts": 0, "verifier_rejections": 0,
-                   "error": f"{type(error).__name__}: {error}"})
-    return record
+    directory = runs_dir / job.run_id
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "manifest.json").write_text(json.dumps(manifest, indent=1))
+    result = {"utility": False, "llm_calls": 0, "plan_retries": 0, "tool_calls": 0, "unauthorized_actions": 0,
+              "irreversible_actions": 0, "seconds": 0.0, "fault_applied": None, "fault_artifact_id": None,
+              "recovered": False, "recovery_llm_calls": 0, "discarded_artifacts": 0, "verifier_rejections": 0,
+              "error": f"{type(error).__name__}: {error}"}
+    (directory / "result.json").write_text(json.dumps(result, indent=1))
+    return load_run(directory)
 
 
 def run_experiment(

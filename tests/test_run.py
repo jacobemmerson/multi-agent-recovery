@@ -323,3 +323,14 @@ def test_run_experiment_accepts_workers(tmp_path, fake_llm_responses):
         (done / "result.json").write_text("{}")
     paths = run_experiment(config_path, "dev", tmp_path / "runs", resume=True, llm=fake_llm_responses(), workers=2)
     assert [p.name for p in paths] == ["workspace-user_task_0-none-clean-r0", "workspace-user_task_0-none-clean-r1"]
+
+
+def test_error_result_keeps_the_failed_runs_events(tmp_path):
+    from mar.run import _write_error_result
+
+    job = Job("workspace", "user_task_0", "none", None, 0)
+    record = RunRecord.start(tmp_path, build_manifest(cfg(), run_id=job.run_id, suite="workspace", task_id="user_task_0", condition="none", fault_id=None, repeat=0, seed=1))
+    record.emit("llm_call", model="m")
+    _write_error_result(job, cfg(), tmp_path, RuntimeError("boom"))
+    loaded = load_run(tmp_path / job.run_id)
+    assert loaded.events[0]["kind"] == "llm_call" and loaded.result["error"] == "RuntimeError: boom"

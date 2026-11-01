@@ -93,3 +93,29 @@ def test_planner_gives_up_after_three_attempts(fake_llm_responses, resp):
     bad = resp(content=json.dumps({"steps": [{"instruction": "do", "cites": []}]}))
     with pytest.raises(PlanRejected):
         Planner().run({"task_id": "t", "prompt": "p", "findings": []}, fake_llm_responses(bad, bad, bad))
+
+
+def test_planner_treats_malformed_json_as_a_failed_attempt(fake_llm_responses, resp):
+    findings = [Finding(id="t:f0", producer="researcher", task_id="t", source="s", content={"text": "x"})]
+    llm = fake_llm_responses(
+        resp(content='{"steps": [{"instruction": "do", "cites": ["t:f0"'),
+        resp(content=json.dumps({"steps": [{"instruction": "do", "cites": ["t:f0"]}]})))
+    [step] = Planner().run({"task_id": "t", "prompt": "p", "findings": findings}, llm)
+    assert step.content["retries"] == 1
+
+
+def test_researcher_retries_once_on_malformed_findings_json(fake_llm_responses, resp):
+    llm = fake_llm_responses(
+        resp(content="ok"),
+        resp(content='{"findings": [{"source": "s", "content": "trunc'),
+        resp(content=json.dumps({"findings": [{"source": "s", "content": "full"}]})))
+    findings = Researcher().run({"task_id": "t", "prompt": "p"}, llm, RecordingTools())
+    assert [f.content["text"] for f in findings] == ["full"] and len(llm.calls) == 3
+
+
+def test_researcher_raises_after_second_malformed_findings_json(fake_llm_responses, resp):
+    from mar.agents import MalformedOutput
+
+    bad = resp(content="{not json")
+    with pytest.raises(MalformedOutput):
+        Researcher().run({"task_id": "t", "prompt": "p"}, fake_llm_responses(resp(content="ok"), bad, bad), RecordingTools())
