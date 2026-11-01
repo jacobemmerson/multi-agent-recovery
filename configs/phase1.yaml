@@ -1,9 +1,9 @@
-# Budget (measured on runs/live8, api-glm-5.3: ~8.5 calls and ~8 s per `none` run, ~3.5 calls per twin):
-# per task, `none` runs 3 x (1 clean + 12 faults) + ~30 twins = 69 runs ~ 590 calls; each baseline 13 runs
-# at ~12-16 calls ~ 180 calls. 20 tasks -> 1,560 jobs (+ ~600 twins), ~23k calls, ~7 h sequential.
+# Budget: 20 tasks -> 1,560 jobs (+ ~600 twins), ~25k calls. On api-glm-5.3 runs took 100-600 s
+# (restart and verify baselines are 30+ calls), ~100 h at 4 workers; on flash ~8-15 s per run, ~12 h.
+# Phase 1 dev split therefore runs on flash (2026-11-01); the GLM 5.3 task 25 runs are kept in runs/phase1.
 name: phase1
 # max_tokens covers reasoning tokens too: at 4096, GLM 5.3 truncated a findings JSON mid-string.
-model: {name: api-glm-5.3, temperature: 0.0, max_tokens: 8192}
+model: {name: api-glm-5.3-flash, temperature: 0.0, max_tokens: 8192}
 tasks: configs/dev_tasks.yaml
 repeats: 3                 # `none`: 3 repeats give the clean-vs-clean noise floor and per-fault twins
 condition_repeats: {restart_scratch: 1, restart_stage: 1, always_verify: 1}
