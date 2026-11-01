@@ -121,6 +121,12 @@ Same smoke runs as above, judged:
 
 The 0.5 on user_task_13 is real: the two clean runs split the sources into findings differently, so
 ids pair different facts, and one run's plan step cites a guidance file the other's does not.
+On the 8-task fault sample (`runs/live8`, 19 applied faults with twins): exact diff marks 0/19 faults
+ignored; the judge marks 8/19 ignored, and over-taint rises from 0 to 1 or 2 on those runs because the
+declared descendants of an ignored fault are all over-taint. 41 of 65 twin artifact pairs were
+byte-identical (copied from the checkpoint) and were not sent to the judge; 24 judge calls took about
+5 minutes including run loading, so judging the full Phase 1 run is roughly 2 to 3 hours.
+
 `mar judge --sample 50` writes judged pairs with an empty `hand_differs` column for the 50-artifact
 agreement check the proposal commits to; `judge.agreement` scores it.
 
