@@ -130,6 +130,72 @@ byte-identical (copied from the checkpoint) and were not sent to the judge; 24 j
 `mar judge --sample 50` writes judged pairs with an empty `hand_differs` column for the 50-artifact
 agreement check the proposal commits to; `judge.agreement` scores it.
 
+## Phase 1 dev run (2026-11-01, agents api-glm-5.3-flash, judge api-glm-5.3)
+
+`configs/phase1.yaml` on the 20-task dev split: 1,560 jobs plus 607 twins, 2,167 finished runs in
+`runs/phase1_flash`, about 6 hours wall clock at 4 workers (median 18 s per run; task 25 runs took
+25 to 90 s). 610 of 720 faults applied.
+
+**Why flash, not GLM 5.3.** The first launch used `api-glm-5.3`. Its reasoning tokens made every
+planner call 20 to 30 s and the restart and verify baselines 30+ calls, so runs took 100 to 600 s and
+the grid projected to about 100 hours at 4 workers; a TritonAI outage overnight on 2026-10-31 added
+16 error results. The 54 finished GLM 5.3 runs (all task 25) stay in `runs/phase1` for reference and
+are not mixed into the Phase 1 tables. On task 25 flash passes utility in most runs where GLM 5.3
+failed most, apparently because the heavier model over-researched and the checker penalised extra
+emails; that is one task and is not generalised.
+
+**Incidents.** A network change mid-run left the four workers on half-dead sockets for 10 minutes
+(the endpoint answered a fresh connection in 0.3 s); the process was killed and relaunched with
+`--resume`, which retried the 15 jobs that had errored with `APIConnectionError`. Three faulted runs
+from that window finished but their twins failed (`twin_error`); resume does not retry those, so
+those three faults have no propagation measurement. One restart_scratch run on task 11 ended in
+`PlanRejected` after three plans and is kept as a failed run rather than rerun.
+
+**Exact-diff columns are still uninformative at scale.** Clean-vs-clean floor by exact diff is
+0.97 / 0.99 / 1.00 (findings / plan steps / executed steps) and exact `ignored` is 0.7% of 607
+applied faults with twins. The judged columns are the ones to read.
+
+**Cost and utility over runs whose fault applied** (means; `none` is the unrecovered pipeline):
+
+| condition | utility | LLM calls | completion tokens | seconds | irreversible actions |
+|---|---|---|---|---|---|
+| none | 0.72 | 9.3 | 1,661 | 34 | 0.31 |
+| restart_stage | 0.89 | 13.3 | 2,118 | 50 | 0.63 |
+| restart_scratch | 0.94 | 18.0 | 3,119 | 65 | 0.61 |
+| always_verify | 0.88 | 23.6 | 3,595 | 82 | 0.28 |
+
+Clean runs pass at 0.85 to 0.90 in every condition, so the faults cost about 0.15 of utility and the
+restart baselines recover almost all of it at 1.4 to 2 times the calls. Both restart baselines double
+the irreversible-action count, because re-execution repeats the side-effecting steps the first attempt
+already took and environment rollback hides that from the checker (see "Restart baselines and
+environment rollback"). Token totals come from the `llm_call` events (`metrics.cost`).
+
+**Judge (api-glm-5.3, 627 pairs, 1,391 LLM verdicts, 1,493 byte-identical pairs, about 1 h at 4
+workers).** 29 verdicts first came back with no content because reasoning tokens exhausted the 4,096
+budget; an error verdict is now retried on resume and the judge runs at 8,192, after which 0 remain.
+
+Judged clean-vs-clean floor, mean over the 20 tasks: findings 0.56, plan steps 0.26, executed steps
+0.24. Findings vary a lot between clean runs on several tasks (1.0 on tasks 11, 20, 36; 0.0 on tasks
+4, 17, 18, 39), so finding-level propagation must be read per task against that task's floor.
+
+Judged propagation over the 607 applied faults with twins: 30% of faults are ignored (no downstream
+artifact changed in the judge's view), against 0.7% by exact diff.
+
+| fault stage | ignored | under-taint (artifacts) | over-taint (artifacts) |
+|---|---|---|---|
+| finding | 0.40 | 0.64 | 0.54 |
+| plan step | 0.20 | 0.13 | 0.22 |
+
+Adversarial plan steps are never ignored (0/120) and `other` plan steps almost never (8%); the
+accidental and `other` finding faults are ignored 39 to 63% of the time, i.e. the planner routinely
+works around a corrupted finding. Utility is 0.90 when the fault was ignored and 0.64 when it
+propagated. 22% of faulted runs have under-taint and 27% have over-taint under the judge; the
+declared descendant set (citations) is therefore wrong in about half the runs where the fault
+propagated, in both directions.
+
+`data/judge_sample_phase1.csv`: 50 LLM-judged pairs (21 judged different, 29 same; 35 executed
+steps, 13 plan steps, 2 findings), `hand_differs` empty, for the agreement check.
+
 ## Frozen fault templates (2026-10-21)
 
 12 templates in `data/fault_templates/` (finding, plan_step x accidental, adversarial, other x obvious, subtle).
