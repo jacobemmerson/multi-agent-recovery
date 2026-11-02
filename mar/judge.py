@@ -153,19 +153,22 @@ def judge_runs(
     llm: LLMClient,
     task_prompt_for: Callable[[str, str], str] = _env_prompt,
     rejudge: bool = False,
+    workers: int = 1,
 ) -> dict[str, int]:
-    """Judge every pair from `pairs_to_judge`, writing judge.json after each pair so the batch resumes."""
-    from mar.run import load_run
+    """Judge every pair from `pairs_to_judge`, writing judge.json after each pair so the batch resumes.
+    Pairs are independent (each owns its judge.json), so they run on a thread pool like experiment jobs."""
+    from mar.run import load_run, run_jobs
 
-    counts = {"pairs": 0, "artifacts_judged": 0, "skipped": 0, "identical": 0}
     prompts: dict[tuple[str, str], str] = {}
-    for left_dir, right_dir in pairs_to_judge(runs_dir):
+
+    def judge_pair(pair: tuple[Path, Path]) -> dict[str, int]:
+        left_dir, right_dir = pair
         left, right = load_run(left_dir), load_run(right_dir)
         key = (left.manifest["suite"], left.manifest["task_id"])
-        prompts.setdefault(key, task_prompt_for(*key))
+        prompt = prompts.setdefault(key, task_prompt_for(*key))
         path = left_dir / JUDGMENTS_FILE
         judgments = {} if rejudge or not path.exists() else json.loads(path.read_text())
-        counts["pairs"] += 1
+        counts = {"pairs": 1, "artifacts_judged": 0, "skipped": 0, "identical": 0}
         for a, b in _judgeable(left, right):
             if a.id in judgments:
                 counts["skipped"] += 1
@@ -173,10 +176,16 @@ def judge_runs(
                 judgments[a.id] = {"differs": False, "reason": "identical text"}
                 counts["identical"] += 1
             else:
-                judgments[a.id] = judge_verdict(a, b, llm, prompts[key])
+                judgments[a.id] = judge_verdict(a, b, llm, prompt)
                 counts["artifacts_judged"] += 1
         path.write_text(json.dumps(judgments, indent=1))
-    return counts
+        return counts
+
+    totals = {"pairs": 0, "artifacts_judged": 0, "skipped": 0, "identical": 0}
+    for counts in run_jobs(pairs_to_judge(runs_dir), judge_pair, workers):
+        for key in totals:
+            totals[key] += counts[key]
+    return totals
 
 
 def load_judgments(directory: Path) -> dict[str, bool]:

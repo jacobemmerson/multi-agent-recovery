@@ -19,6 +19,7 @@ def main(argv: list[str] | None = None) -> None:
     judge.add_argument("--runs-dir", type=Path, default=Path("runs"))
     judge.add_argument("--model", default="api-glm-5.3")
     judge.add_argument("--rejudge", action="store_true")
+    judge.add_argument("--workers", type=int, default=1, help="concurrent pairs; TritonAI throughput saturates near 4")
     judge.add_argument("--sample", type=int, help="write N judged pairs as a CSV for hand labelling")
     judge.add_argument("--out", type=Path, default=Path("data/judge_sample.csv"))
 
@@ -63,7 +64,7 @@ def _judge(args: argparse.Namespace) -> None:
     from mar.judge import judge_runs, sample_for_hand_labels
     from mar.llm import OpenAICompatibleClient
 
-    counts = judge_runs(args.runs_dir, OpenAICompatibleClient.from_config(ModelConfig(name=args.model)), rejudge=args.rejudge)
+    counts = judge_runs(args.runs_dir, OpenAICompatibleClient.from_config(ModelConfig(name=args.model)), rejudge=args.rejudge, workers=args.workers)
     print(f"judged {counts['artifacts_judged']} artifacts across {counts['pairs']} pairs, {counts['identical']} identical, skipped {counts['skipped']} already judged")
     if args.sample:
         sample = sample_for_hand_labels(args.runs_dir, n=args.sample)

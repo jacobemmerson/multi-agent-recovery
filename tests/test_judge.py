@@ -155,3 +155,13 @@ def test_identical_texts_are_not_sent_to_the_judge(tmp_path, build_run, fake_llm
     counts = judge_runs(tmp_path, llm, task_prompt_for=lambda suite, task_id: "p")
     assert counts == {"pairs": 1, "artifacts_judged": 0, "skipped": 0, "identical": 3} and llm.calls == []
     assert load_judgments(tmp_path / "workspace-t-none-clean-r0") == {"t:f0": False, "t:p0": False, "t:exec:t:p0": False}
+
+
+def test_judge_runs_on_workers_matches_sequential(tmp_path, build_run, fake_llm_responses, resp):
+    runs = _runs_dir(tmp_path, build_run)
+    same = json.dumps({"same": True, "reason": "r"})
+    llm = fake_llm_responses(*[resp(content=same)] * 10)
+    counts = judge_runs(runs, llm, task_prompt_for=lambda suite, task_id: "prompt", workers=2)
+    assert counts == {"pairs": 2, "artifacts_judged": 5, "skipped": 0, "identical": 0} and len(llm.calls) == 5
+    assert set(load_judgments(runs / "workspace-t-none-date-r0")) == {"t:p0", "t:exec:t:p0"}
+    assert len(load_judgments(runs / "workspace-t-none-clean-r0")) == 3
