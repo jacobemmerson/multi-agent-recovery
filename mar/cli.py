@@ -64,7 +64,9 @@ def _judge(args: argparse.Namespace) -> None:
     from mar.judge import judge_runs, sample_for_hand_labels
     from mar.llm import OpenAICompatibleClient
 
-    counts = judge_runs(args.runs_dir, OpenAICompatibleClient.from_config(ModelConfig(name=args.model)), rejudge=args.rejudge, workers=args.workers)
+    # 8192: GLM 5.3 reasoning tokens exhausted 4096 on long executed-step outputs and returned no content.
+    llm = OpenAICompatibleClient.from_config(ModelConfig(name=args.model, max_tokens=8192))
+    counts = judge_runs(args.runs_dir, llm, rejudge=args.rejudge, workers=args.workers)
     print(f"judged {counts['artifacts_judged']} artifacts across {counts['pairs']} pairs, {counts['identical']} identical, skipped {counts['skipped']} already judged")
     if args.sample:
         sample = sample_for_hand_labels(args.runs_dir, n=args.sample)

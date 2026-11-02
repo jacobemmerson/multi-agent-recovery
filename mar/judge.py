@@ -155,8 +155,8 @@ def judge_runs(
     rejudge: bool = False,
     workers: int = 1,
 ) -> dict[str, int]:
-    """Judge every pair from `pairs_to_judge`, writing judge.json after each pair so the batch resumes.
-    Pairs are independent (each owns its judge.json), so they run on a thread pool like experiment jobs."""
+    """Judge every pair from `pairs_to_judge`, writing judge.json after each pair so the batch resumes;
+    an error verdict is not a verdict and is retried. Pairs are independent (each owns its judge.json), so they run on a thread pool like experiment jobs."""
     from mar.run import load_run, run_jobs
 
     prompts: dict[tuple[str, str], str] = {}
@@ -168,6 +168,7 @@ def judge_runs(
         prompt = prompts.setdefault(key, task_prompt_for(*key))
         path = left_dir / JUDGMENTS_FILE
         judgments = {} if rejudge or not path.exists() else json.loads(path.read_text())
+        judgments = {k: v for k, v in judgments.items() if not v["reason"].startswith("judge_error")}
         counts = {"pairs": 1, "artifacts_judged": 0, "skipped": 0, "identical": 0}
         for a, b in _judgeable(left, right):
             if a.id in judgments:

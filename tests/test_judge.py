@@ -165,3 +165,16 @@ def test_judge_runs_on_workers_matches_sequential(tmp_path, build_run, fake_llm_
     assert counts == {"pairs": 2, "artifacts_judged": 5, "skipped": 0, "identical": 0} and len(llm.calls) == 5
     assert set(load_judgments(runs / "workspace-t-none-date-r0")) == {"t:p0", "t:exec:t:p0"}
     assert len(load_judgments(runs / "workspace-t-none-clean-r0")) == 3
+
+
+def test_judge_runs_retries_judge_errors_on_resume(tmp_path, build_run, fake_llm_responses, resp):
+    runs = _runs_dir(tmp_path, build_run)
+    same = json.dumps({"same": True, "reason": "r"})
+    llm = fake_llm_responses(resp(content=None), *[resp(content=same)] * 10)
+    judge_runs(runs, llm, task_prompt_for=lambda suite, task_id: "prompt")
+    errored = [k for k, v in json.loads((runs / "workspace-t-none-clean-r0" / "judge.json").read_text()).items()
+               if v["reason"].startswith("judge_error")]
+    assert len(errored) == 1
+    again = judge_runs(runs, llm, task_prompt_for=lambda suite, task_id: "prompt")
+    assert again["artifacts_judged"] == 1 and again["skipped"] == 4
+    assert load_judgments(runs / "workspace-t-none-clean-r0")[errored[0]] is False
