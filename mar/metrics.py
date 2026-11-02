@@ -53,8 +53,17 @@ def harm(run) -> dict[str, int]:
     raise NotImplementedError
 
 
-def cost(run) -> dict[str, float]:
-    raise NotImplementedError
+def cost(run) -> dict[str, int]:
+    """Token totals over the run's llm_call events; reasoning tokens are a subset of completion tokens."""
+    totals = {"prompt_tokens": 0, "completion_tokens": 0, "reasoning_tokens": 0}
+    for event in run.events:
+        if event["kind"] != "llm_call":
+            continue
+        usage = event.get("usage") or {}
+        totals["prompt_tokens"] += usage.get("prompt_tokens") or 0
+        totals["completion_tokens"] += usage.get("completion_tokens") or 0
+        totals["reasoning_tokens"] += (usage.get("completion_tokens_details") or {}).get("reasoning_tokens") or 0
+    return totals
 
 
 def bootstrap_ci(values, n: int = 1000, seed: int = 0, level: float = 0.95) -> tuple[float, float]:
@@ -107,7 +116,9 @@ def _with_judged_taint(frame: pd.DataFrame, runs_dir: Path) -> pd.DataFrame:
 
 
 def aggregate(runs_dir: Path, out: Path) -> pd.DataFrame:
-    """One row per finished run: manifest fields plus result fields. Written to `out` as parquet."""
+    """One row per finished run: manifest fields, result fields and token totals. Written to `out` as parquet."""
+    from mar.run import load_run
+
     rows = []
     skipped = 0
     for manifest_path in sorted(runs_dir.glob("*/manifest.json")):
@@ -118,7 +129,7 @@ def aggregate(runs_dir: Path, out: Path) -> pd.DataFrame:
         manifest = json.loads(manifest_path.read_text())
         if "prompt_hashes" in manifest:
             manifest["prompt_hashes"] = json.dumps(manifest["prompt_hashes"])
-        rows.append(manifest | json.loads(result_path.read_text()))
+        rows.append(manifest | json.loads(result_path.read_text()) | cost(load_run(manifest_path.parent)))
     frame = pd.DataFrame(rows)
     if len(frame) and {"task_id", "condition", "fault_id", "repeat"} <= set(frame.columns):
         frame = _with_noise_floor(frame, runs_dir)

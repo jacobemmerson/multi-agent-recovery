@@ -135,3 +135,12 @@ def test_exact_diff_compares_text_not_metadata():
     b = PlanStep(id="p", producer="p", task_id="t", index=0, content={"instruction": "do", "retries": 2, "verified": True})
     assert exact_diff(a, b) is False
     assert exact_diff(a, b.model_copy(update={"content": {"instruction": "other"}})) is True
+
+
+def test_plots_prefer_judged_taint_columns_when_present():
+    from scripts.plots import taint_column
+
+    exact_only = pd.DataFrame({"ignored": [True]})
+    both = pd.DataFrame({"ignored": [True], "judged_ignored": [False]})
+    assert taint_column(exact_only, "ignored") == "ignored"
+    assert taint_column(both, "ignored") == "judged_ignored"

@@ -26,20 +26,28 @@ def _bar_with_ci(ax, groups: dict[str, list[float]], title: str, ylabel: str) ->
     ax.set_ylabel(ylabel)
 
 
+def taint_column(df: pd.DataFrame, name: str) -> str:
+    """The judge's version of a taint column when `mar judge` has run, else the exact-diff one."""
+    judged = f"judged_{name}"
+    return judged if judged in df.columns else name
+
+
 def plot_propagation(df: pd.DataFrame, out: Path) -> None:
-    faulted = df[(df["condition"] == "none") & df["fault_id"].notna() & df["ignored"].notna()]
-    groups = {fid: (~g["ignored"].astype(bool)).astype(float).tolist() for fid, g in faulted.groupby("fault_id")}
+    ignored = taint_column(df, "ignored")
+    faulted = df[(df["condition"] == "none") & df["fault_id"].notna() & df[ignored].notna()]
+    groups = {fid: (~g[ignored].astype(bool)).astype(float).tolist() for fid, g in faulted.groupby("fault_id")}
     fig, ax = plt.subplots(figsize=(9, 4))
-    _bar_with_ci(ax, groups, "Propagation: fraction of faults that changed downstream artifacts", "fraction")
+    _bar_with_ci(ax, groups, f"Propagation: fraction of faults that changed downstream artifacts ({ignored})", "fraction")
     fig.tight_layout()
     fig.savefig(out / "propagation.png", dpi=150)
 
 
 def plot_taint(df: pd.DataFrame, out: Path) -> None:
-    faulted = df[(df["condition"] == "none") & df["under_taint"].notna()]
+    under, over = taint_column(df, "under_taint"), taint_column(df, "over_taint")
+    faulted = df[(df["condition"] == "none") & df[under].notna()]
     faulted = faulted.assign(stage=faulted["fault_id"].str.split("_").str[0])
     fig, axes = plt.subplots(1, 2, figsize=(9, 4))
-    for ax, metric in zip(axes, ("under_taint", "over_taint")):
+    for ax, metric in zip(axes, (under, over)):
         groups = {stage: g[metric].astype(float).tolist() for stage, g in faulted.groupby("stage")}
         _bar_with_ci(ax, groups, metric.replace("_", " "), "artifacts")
     fig.tight_layout()
@@ -53,16 +61,19 @@ def baseline_groups(df: pd.DataFrame, metric: str) -> dict[str, list[float]]:
 
 
 def plot_baselines(df: pd.DataFrame, out: Path) -> None:
-    fig, axes = plt.subplots(1, 2, figsize=(9, 4))
+    fig, axes = plt.subplots(1, 3, figsize=(13, 4))
     _bar_with_ci(axes[0], baseline_groups(df, "utility"), "Utility after an applied fault", "pass rate")
     _bar_with_ci(axes[1], baseline_groups(df, "llm_calls"), "Cost", "LLM calls per run")
+    _bar_with_ci(axes[2], baseline_groups(df, "completion_tokens"), "Cost", "completion tokens per run")
     fig.tight_layout()
     fig.savefig(out / "baselines.png", dpi=150)
 
 
 def plot_noise_floor(df: pd.DataFrame, out: Path) -> None:
     """Noise floor per task from clean runs, if the aggregate carries it (added by a later analysis step)."""
-    columns = [c for c in ("floor_findings", "floor_plan_steps", "floor_executed_steps") if c in df.columns]
+    kinds = ("findings", "plan_steps", "executed_steps")
+    prefix = "floor_judged_" if "floor_judged_findings" in df.columns else "floor_"
+    columns = [prefix + kind for kind in kinds if prefix + kind in df.columns]
     if not columns:
         return
     clean = df[df["fault_id"].isna()].groupby("task_id")[columns].mean()

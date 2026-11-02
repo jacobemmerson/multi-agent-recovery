@@ -57,3 +57,35 @@ def test_taint_for_run_accepts_custom_differs(build_run):
     assert never["counterfactual_changed"] == 0 and never["ignored"] is True
     always = taint_for_run(faulted, twin, differs=lambda a, b: True)
     assert always["counterfactual_changed"] == 5  # every artifact but the fault itself
+
+
+def _usage(prompt, completion, reasoning):
+    return {"prompt_tokens": prompt, "completion_tokens": completion, "total_tokens": prompt + completion,
+            "completion_tokens_details": {"reasoning_tokens": reasoning}}
+
+
+def test_cost_sums_tokens_over_llm_calls(build_run):
+    from mar.metrics import cost
+
+    run = build_run("a", ["x"], [])
+    run.emit("llm_call", model="m", usage=_usage(100, 20, 5))
+    run.emit("tool_action", id="t:a1", tool="search")
+    run.emit("llm_call", model="m", usage=_usage(200, 30, 0))
+    assert cost(run) == {"prompt_tokens": 300, "completion_tokens": 50, "reasoning_tokens": 5}
+
+
+def test_cost_tolerates_missing_usage(build_run):
+    from mar.metrics import cost
+
+    run = build_run("a", ["x"], [])
+    run.emit("llm_call", model="m", usage={})
+    assert cost(run) == {"prompt_tokens": 0, "completion_tokens": 0, "reasoning_tokens": 0}
+
+
+def test_aggregate_adds_token_columns(tmp_path, build_run):
+    run = build_run("a", ["x"], [])
+    run.emit("llm_call", model="m", usage=_usage(100, 20, 5))
+    run.manifest.update(task_id="t", condition="none", fault_id=None, repeat=0)
+    run.finish({"utility": True, "llm_calls": 1, "seconds": 2.0})
+    df = aggregate(tmp_path, tmp_path / "agg.parquet")
+    assert df.loc[0, ["prompt_tokens", "completion_tokens", "reasoning_tokens"]].tolist() == [100, 20, 5]
