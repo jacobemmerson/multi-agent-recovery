@@ -178,3 +178,14 @@ def test_judge_runs_retries_judge_errors_on_resume(tmp_path, build_run, fake_llm
     again = judge_runs(runs, llm, task_prompt_for=lambda suite, task_id: "prompt")
     assert again["artifacts_judged"] == 1 and again["skipped"] == 4
     assert load_judgments(runs / "workspace-t-none-clean-r0")[errored[0]] is False
+
+
+def test_hand_label_sample_excludes_identical_texts(tmp_path, build_run, fake_llm_responses, resp):
+    for name, repeat, finding in (("workspace-t-none-clean-r0", 0, "a"), ("workspace-t-none-clean-r1", 1, "b")):
+        record = build_run(name, [finding], [("s", ["t:f0"])], ["e"])
+        record.manifest.update(task_id="t", condition="none", fault_id=None, repeat=repeat, suite="workspace")
+        record.finish({"utility": True})
+    llm = fake_llm_responses(resp(content=json.dumps({"same": False, "reason": "r"})))
+    judge_runs(tmp_path, llm, task_prompt_for=lambda suite, task_id: "p")
+    sample = sample_for_hand_labels(tmp_path, n=50, seed=0)
+    assert sample["artifact_id"].tolist() == ["t:f0"]

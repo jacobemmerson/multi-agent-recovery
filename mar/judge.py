@@ -189,11 +189,13 @@ def judge_runs(
     return totals
 
 
-def load_judgments(directory: Path) -> dict[str, bool]:
+def load_verdicts(directory: Path) -> dict[str, dict[str, Any]]:
     path = directory / JUDGMENTS_FILE
-    if not path.exists():
-        return {}
-    return {artifact_id: v["differs"] for artifact_id, v in json.loads(path.read_text()).items()}
+    return json.loads(path.read_text()) if path.exists() else {}
+
+
+def load_judgments(directory: Path) -> dict[str, bool]:
+    return {artifact_id: v["differs"] for artifact_id, v in load_verdicts(directory).items()}
 
 
 def judged_differs(judgments: dict[str, bool]) -> Differs:
@@ -202,17 +204,18 @@ def judged_differs(judgments: dict[str, bool]) -> Differs:
 
 
 def sample_for_hand_labels(runs_dir: Path, n: int = 50, seed: int = 0) -> pd.DataFrame:
+    """Only pairs the LLM actually judged; byte-identical pairs would tell nothing about the judge."""
     from mar.run import load_run
 
     rows = []
     for left_dir, right_dir in pairs_to_judge(runs_dir):
-        judgments = load_judgments(left_dir)
-        if not judgments:
+        verdicts = {k: v for k, v in load_verdicts(left_dir).items() if v["reason"] != "identical text"}
+        if not verdicts:
             continue
         left, right = load_run(left_dir), load_run(right_dir)
         for a, b in _judgeable(left, right):
-            if a.id in judgments:
+            if a.id in verdicts:
                 rows.append({"run_id": left.run_id, "artifact_id": a.id, "kind": a.kind, "text_a": artifact_text(a),
-                             "text_b": artifact_text(b), "judge_differs": judgments[a.id], "hand_differs": ""})
+                             "text_b": artifact_text(b), "judge_differs": verdicts[a.id]["differs"], "hand_differs": ""})
     chosen = random.Random(seed).sample(rows, min(n, len(rows)))
     return pd.DataFrame(chosen, columns=["run_id", "artifact_id", "kind", "text_a", "text_b", "judge_differs", "hand_differs"])
