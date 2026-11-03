@@ -521,6 +521,15 @@ def _write_error_result(job: Job, config: ExperimentConfig, runs_dir: Path, erro
     return load_run(directory)
 
 
+def _finished_without_error(directory: Path) -> bool:
+    """A job with a failed twin is rerun whole: the twin needs the faulted run's in-memory checkpoint."""
+    result_path = directory / "result.json"
+    if not result_path.exists():
+        return False
+    result = json.loads(result_path.read_text())
+    return "error" not in result and "twin_error" not in result
+
+
 def run_experiment(
     config_path: Path,
     tasks: Literal["dev", "eval"],
@@ -542,7 +551,7 @@ def run_experiment(
     def run_one(numbered: tuple[int, Job]) -> Path:
         n, job = numbered
         directory = runs_dir / job.run_id
-        if resume and (directory / "result.json").exists() and "error" not in json.loads((directory / "result.json").read_text()):
+        if resume and _finished_without_error(directory):
             print(f"[{n}/{len(jobs)}] {job.run_id} skipped (done)", flush=True)
             return directory
         try:

@@ -334,3 +334,20 @@ def test_error_result_keeps_the_failed_runs_events(tmp_path):
     _write_error_result(job, cfg(), tmp_path, RuntimeError("boom"))
     loaded = load_run(tmp_path / job.run_id)
     assert loaded.events[0]["kind"] == "llm_call" and loaded.result["error"] == "RuntimeError: boom"
+
+
+def test_resume_reruns_a_job_whose_twin_failed(tmp_path, fake_llm_responses):
+    tasks_path = tmp_path / "tasks.yaml"
+    tasks_path.write_text(yaml.safe_dump({"benchmark_version": "v1.2", "suites": {"workspace": ["user_task_0"]}}))
+    config_path = tmp_path / "exp.yaml"
+    config_path.write_text(yaml.safe_dump({
+        "name": "smoke", "model": {"name": "fake"}, "tasks": str(tasks_path), "repeats": 1,
+        "conditions": ["none"], "fault_templates": str(tmp_path / "no_templates"),
+    }))
+    (tmp_path / "no_templates").mkdir()
+    done = tmp_path / "runs" / "workspace-user_task_0-none-clean-r0"
+    done.mkdir(parents=True)
+    (done / "result.json").write_text(json.dumps({"utility": True, "twin_error": "APIConnectionError: x"}))
+    llm = fake_llm_responses()
+    run_experiment(config_path, "dev", tmp_path / "runs", resume=True, llm=llm)
+    assert llm.calls != [] and "twin_error" not in json.loads((done / "result.json").read_text())
