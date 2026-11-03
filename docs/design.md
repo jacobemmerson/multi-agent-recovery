@@ -132,7 +132,7 @@ agreement check the proposal commits to; `judge.agreement` scores it.
 
 ## Phase 1 dev run (2026-11-01, agents api-glm-5.3-flash, judge api-glm-5.3)
 
-`configs/phase1.yaml` on the 20-task dev split: 1,560 jobs plus 607 twins, 2,167 finished runs in
+`configs/phase1.yaml` on the 20-task dev split: 1,560 jobs plus 610 twins, 2,170 finished runs in
 `runs/phase1_flash`, about 6 hours wall clock at 4 workers (median 18 s per run; task 25 runs took
 25 to 90 s). 610 of 720 faults applied.
 
@@ -147,12 +147,14 @@ emails; that is one task and is not generalised.
 **Incidents.** A network change mid-run left the four workers on half-dead sockets for 10 minutes
 (the endpoint answered a fresh connection in 0.3 s); the process was killed and relaunched with
 `--resume`, which retried the 15 jobs that had errored with `APIConnectionError`. Three faulted runs
-from that window finished but their twins failed (`twin_error`); resume does not retry those, so
-those three faults have no propagation measurement. One restart_scratch run on task 11 ended in
-`PlanRejected` after three plans and is kept as a failed run rather than rerun.
+from that window finished but their twins failed (`twin_error`); resume did not retry those (only
+`error` results), contrary to the comment in `run_job`. Fixed: a failed twin now reruns the whole
+job, since the twin needs the faulted run's in-memory checkpoint, so those three faulted runs are
+fresh samples. One restart_scratch run on task 11 ended in `PlanRejected` after three plans; the same
+resume reran it and it passed. The final set has 0 error results.
 
 **Exact-diff columns are still uninformative at scale.** Clean-vs-clean floor by exact diff is
-0.97 / 0.99 / 1.00 (findings / plan steps / executed steps) and exact `ignored` is 0.7% of 607
+0.97 / 0.99 / 1.00 (findings / plan steps / executed steps) and exact `ignored` is 0.7% of 610
 applied faults with twins. The judged columns are the ones to read.
 
 **Cost and utility over runs whose fault applied** (means; `none` is the unrecovered pipeline):
@@ -168,9 +170,14 @@ Clean runs pass at 0.85 to 0.90 in every condition, so the faults cost about 0.1
 restart baselines recover almost all of it at 1.4 to 2 times the calls. Both restart baselines double
 the irreversible-action count, because re-execution repeats the side-effecting steps the first attempt
 already took and environment rollback hides that from the checker (see "Restart baselines and
-environment rollback"). Token totals come from the `llm_call` events (`metrics.cost`).
+environment rollback"). Token totals come from the `llm_call` events (`metrics.cost`). Wasted work:
+restart_scratch discards 8.6 artifacts and spends 8.7 recovery calls per run, restart_stage discards
+8.6 and spends 4.1 (the restart keeps the findings but the plan and executed steps are redone).
 
-**Judge (api-glm-5.3, 627 pairs, 1,391 LLM verdicts, 1,493 byte-identical pairs, about 1 h at 4
+**Deviations from the proposal.** Note-entry faults (the third stage in the proposal's fault table)
+have no templates and were not run. Reported runs use flash, not GLM 5.3, for the reason above.
+
+**Judge (api-glm-5.3, 630 pairs, 1,397 LLM verdicts, 1,505 byte-identical pairs, about 1 h at 4
 workers).** 29 verdicts first came back with no content because reasoning tokens exhausted the 4,096
 budget; an error verdict is now retried on resume and the judge runs at 8,192, after which 0 remain.
 
@@ -178,12 +185,12 @@ Judged clean-vs-clean floor, mean over the 20 tasks: findings 0.56, plan steps 0
 0.24. Findings vary a lot between clean runs on several tasks (1.0 on tasks 11, 20, 36; 0.0 on tasks
 4, 17, 18, 39), so finding-level propagation must be read per task against that task's floor.
 
-Judged propagation over the 607 applied faults with twins: 30% of faults are ignored (no downstream
+Judged propagation over the 610 applied faults with twins: 30% of faults are ignored (no downstream
 artifact changed in the judge's view), against 0.7% by exact diff.
 
 | fault stage | ignored | under-taint (artifacts) | over-taint (artifacts) |
 |---|---|---|---|
-| finding | 0.40 | 0.64 | 0.54 |
+| finding | 0.41 | 0.64 | 0.54 |
 | plan step | 0.20 | 0.13 | 0.22 |
 
 Adversarial plan steps are never ignored (0/120) and `other` plan steps almost never (8%); the
