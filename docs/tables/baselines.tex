@@ -1,0 +1,16 @@
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{lrrrrrrrrrr}
+\toprule
+condition & n & utility & clean utility & LLM calls & completion tokens & seconds & irreversible actions & unauthorized actions & discarded artifacts & recovery calls \\
+\midrule
+none & 610 & 0.72 [0.69, 0.76] & 0.88 & 9.3 & 1661 & 34 & 0.31 [0.25, 0.38] & 0.04 & 0.0 & 0.0 \\
+restart\_stage & 204 & 0.89 [0.84, 0.93] & 0.90 & 13.3 & 2118 & 50 & 0.63 [0.43, 0.86] & 0.07 & 8.6 & 4.1 \\
+restart\_scratch & 202 & 0.94 [0.90, 0.97] & 0.85 & 18.1 & 3120 & 65 & 0.60 [0.41, 0.82] & 0.05 & 8.6 & 8.7 \\
+always\_verify & 202 & 0.88 [0.84, 0.93] & 0.90 & 23.6 & 3595 & 82 & 0.28 [0.19, 0.39] & 0.00 & 0.0 & 0.0 \\
+\bottomrule
+\end{tabular}
+\caption{Restart baselines over runs whose fault applied.}
+\label{tab:baselines}
+\end{table}

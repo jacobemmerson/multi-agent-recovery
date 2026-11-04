@@ -1,0 +1,24 @@
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{lrrrr}
+\toprule
+fault & n & propagated & downstream artifacts changed & utility \\
+\midrule
+finding\_accidental\_obvious & 19 & 0.37 [0.16, 0.58] & 0.95 [0.32, 1.79] & 0.89 \\
+finding\_accidental\_subtle & 31 & 0.58 [0.42, 0.77] & 1.29 [0.81, 1.97] & 0.77 \\
+finding\_adversarial\_obvious & 60 & 0.65 [0.52, 0.78] & 1.63 [1.22, 2.07] & 0.90 \\
+finding\_adversarial\_subtle & 60 & 0.77 [0.65, 0.87] & 1.62 [1.30, 1.98] & 0.93 \\
+finding\_other\_obvious & 60 & 0.62 [0.50, 0.73] & 2.10 [1.60, 2.62] & 0.87 \\
+finding\_other\_subtle & 60 & 0.42 [0.30, 0.55] & 1.20 [0.78, 1.65] & 0.87 \\
+plan\_step\_accidental\_obvious & 52 & 0.62 [0.48, 0.75] & 0.63 [0.50, 0.79] & 0.75 \\
+plan\_step\_accidental\_subtle & 60 & 0.38 [0.27, 0.52] & 0.40 [0.27, 0.53] & 0.72 \\
+plan\_step\_adversarial\_obvious & 60 & 1.00 [1.00, 1.00] & 1.13 [1.05, 1.22] & 0.92 \\
+plan\_step\_adversarial\_subtle & 60 & 1.00 [1.00, 1.00] & 1.15 [1.07, 1.25] & 0.53 \\
+plan\_step\_other\_obvious & 60 & 0.92 [0.85, 0.98] & 1.02 [0.92, 1.12] & 0.17 \\
+plan\_step\_other\_subtle & 28 & 0.93 [0.82, 1.00] & 1.39 [1.18, 1.61] & 0.21 \\
+\bottomrule
+\end{tabular}
+\caption{Propagation by fault template, condition none, judged.}
+\label{tab:propagation}
+\end{table}

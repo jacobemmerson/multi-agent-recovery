@@ -1,10 +1,10 @@
-# multi-agent-recovery
+# Provenance-Guided Multiagent Failure Propagation and Recovery
 
 Provenance-gated recovery in multi-agent LLM workflows (CSE 291A). A researcher, planner and executor
 pipeline runs AgentDojo workspace tasks; one artifact per run is corrupted at a stage boundary, a
 counterfactual twin shows what the fault changed, and recovery baselines are measured on utility, cost
 and residual side effects. Proposal: [docs/proposal.md](docs/proposal.md). Design log and every
-measured number: [docs/design.md](docs/design.md). Headline tables: [docs/phase1_tables.md](docs/phase1_tables.md).
+measured number: [docs/design.md](docs/design.md). Headline tables: [docs/phase1_tables.md](docs/phase1_tables.md), LaTeX in `docs/tables/`.
 
 ## Setup
 
@@ -26,6 +26,7 @@ uv run mar aggregate --runs-dir runs/phase1_flash --out runs/phase1_flash/aggreg
 uv run python scripts/plots.py runs/phase1_flash/aggregate.parquet figures/phase1_flash
 uv run python scripts/findings_figure.py runs/phase1_flash/aggregate.parquet docs/findings.png
 uv run python scripts/pipeline_figure.py docs/pipeline.png
+uv run python scripts/latex_tables.py runs/phase1_flash/aggregate.parquet docs/tables
 ```
 
 `--resume` skips finished runs and retries error results and runs whose twin failed. `mar judge`
