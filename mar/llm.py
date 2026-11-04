@@ -34,6 +34,11 @@ class LLMClient(Protocol):
     ) -> LLMResponse: ...
 
 
+# A judge call takes ~5 s and an agent call under 30 s; the SDK default of 600 s with retries let one
+# hung request stall a batch for 40 minutes.
+REQUEST_TIMEOUT_SECONDS = 120
+
+
 class OpenAICompatibleClient:
     """Chat completions against BASE_URL with TRITONAI_API_KEY, both read from the environment."""
 
@@ -53,7 +58,10 @@ class OpenAICompatibleClient:
         if self._client is None:
             import openai
 
-            self._client = openai.OpenAI(base_url=os.environ["BASE_URL"], api_key=os.environ["TRITONAI_API_KEY"])
+            self._client = openai.OpenAI(
+                base_url=os.environ["BASE_URL"], api_key=os.environ["TRITONAI_API_KEY"],
+                timeout=REQUEST_TIMEOUT_SECONDS, max_retries=3,
+            )
         return self._client
 
     def complete(self, messages, tools=None, schema=None) -> LLMResponse:

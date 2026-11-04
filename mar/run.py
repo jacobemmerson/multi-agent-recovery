@@ -6,6 +6,7 @@ runs/<run_id>/. fork_twin starts a counterfactual run from a pre-injection snaps
 """
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 import subprocess
 import time
 import zlib
@@ -437,8 +438,10 @@ def expand_jobs(config: ExperimentConfig, tasks: TaskSet, templates: list[FaultT
     jobs = []
     for suite, task_ids in sorted(tasks.suites.items()):
         for task_id in task_ids:
-            for repeat in range(config.repeats):
+            for repeat in range(max(map(config.repeats_for, config.conditions))):
                 for condition in config.conditions:
+                    if repeat >= config.repeats_for(condition):
+                        continue
                     jobs.append(Job(suite, task_id, condition, None, repeat))
                     jobs.extend(Job(suite, task_id, condition, t.id, repeat) for t in phase1_templates)
     return jobs
@@ -501,17 +504,30 @@ def run_job(job: Job, config: ExperimentConfig, tasks: TaskSet, llm: LLMClient, 
 
 
 def _write_error_result(job: Job, config: ExperimentConfig, runs_dir: Path, error: Exception) -> RunRecord:
-    """A job that raised still gets a result.json, so the batch continues and --resume retries it later."""
+    """A job that raised still gets a result.json, so the batch continues and --resume retries it later.
+    The events the failed run wrote are left in place for diagnosis."""
     manifest = build_manifest(
         config, run_id=job.run_id, suite=job.suite, task_id=job.task_id, condition=job.condition,
         fault_id=job.fault_id, repeat=job.repeat, seed=job.seed,
     )
-    record = RunRecord.start(runs_dir, manifest)
-    record.finish({"utility": False, "llm_calls": 0, "plan_retries": 0, "tool_calls": 0, "unauthorized_actions": 0,
-                   "irreversible_actions": 0, "seconds": 0.0, "fault_applied": None, "fault_artifact_id": None,
-                   "recovered": False, "recovery_llm_calls": 0, "discarded_artifacts": 0, "verifier_rejections": 0,
-                   "error": f"{type(error).__name__}: {error}"})
-    return record
+    directory = runs_dir / job.run_id
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "manifest.json").write_text(json.dumps(manifest, indent=1))
+    result = {"utility": False, "llm_calls": 0, "plan_retries": 0, "tool_calls": 0, "unauthorized_actions": 0,
+              "irreversible_actions": 0, "seconds": 0.0, "fault_applied": None, "fault_artifact_id": None,
+              "recovered": False, "recovery_llm_calls": 0, "discarded_artifacts": 0, "verifier_rejections": 0,
+              "error": f"{type(error).__name__}: {error}"}
+    (directory / "result.json").write_text(json.dumps(result, indent=1))
+    return load_run(directory)
+
+
+def _finished_without_error(directory: Path) -> bool:
+    """A job with a failed twin is rerun whole: the twin needs the faulted run's in-memory checkpoint."""
+    result_path = directory / "result.json"
+    if not result_path.exists():
+        return False
+    result = json.loads(result_path.read_text())
+    return "error" not in result and "twin_error" not in result
 
 
 def run_experiment(
@@ -520,6 +536,7 @@ def run_experiment(
     runs_dir: Path,
     resume: bool,
     llm: LLMClient | None = None,
+    workers: int = 1,
 ) -> list[Path]:
     config = load_experiment(config_path)
     task_set = load_task_set(Path(config.tasks) if tasks == "dev" else Path("configs/eval_tasks.yaml"))
@@ -531,17 +548,27 @@ def run_experiment(
         from mar.llm import OpenAICompatibleClient
 
         llm = OpenAICompatibleClient.from_config(config.model)
-    directories = []
-    for n, job in enumerate(jobs, 1):
+    def run_one(numbered: tuple[int, Job]) -> Path:
+        n, job = numbered
         directory = runs_dir / job.run_id
-        if resume and (directory / "result.json").exists() and "error" not in json.loads((directory / "result.json").read_text()):
-            print(f"[{n}/{len(jobs)}] {job.run_id} skipped (done)")
-        else:
-            try:
-                record = run_job(job, config, task_set, llm, runs_dir, templates)
-                print(f"[{n}/{len(jobs)}] {job.run_id} utility={record.result['utility']} llm={record.result['llm_calls']} {record.result['seconds']}s")
-            except Exception as error:
-                _write_error_result(job, config, runs_dir, error)
-                print(f"[{n}/{len(jobs)}] {job.run_id} ERROR {type(error).__name__}: {error}")
-        directories.append(directory)
-    return directories
+        if resume and _finished_without_error(directory):
+            print(f"[{n}/{len(jobs)}] {job.run_id} skipped (done)", flush=True)
+            return directory
+        try:
+            record = run_job(job, config, task_set, llm, runs_dir, templates)
+            print(f"[{n}/{len(jobs)}] {job.run_id} utility={record.result['utility']} llm={record.result['llm_calls']} {record.result['seconds']}s", flush=True)
+        except Exception as error:
+            _write_error_result(job, config, runs_dir, error)
+            print(f"[{n}/{len(jobs)}] {job.run_id} ERROR {type(error).__name__}: {error}", flush=True)
+        return directory
+
+    return run_jobs(list(enumerate(jobs, 1)), run_one, workers)
+
+
+def run_jobs(jobs: list, work: Callable[[Any], Any], workers: int) -> list:
+    """Run `work` over `jobs` on a thread pool; results come back in job order. Jobs share only the LLM
+    client, which is thread-safe; every job builds its own Env and RunRecord."""
+    if workers <= 1:
+        return [work(job) for job in jobs]
+    with ThreadPoolExecutor(workers) as pool:
+        return list(pool.map(work, jobs))

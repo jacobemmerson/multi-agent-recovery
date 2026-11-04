@@ -123,6 +123,18 @@ PLAN_SCHEMA: dict[str, Any] = {
 PLANNER_ATTEMPTS = 3
 
 
+class MalformedOutput(Exception):
+    """A schema-enforced response that still did not parse, typically truncated by the token budget."""
+
+
+def parse_json_object(content: str | None) -> dict | None:
+    try:
+        parsed = json.loads(content or "")
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
 class PlanRejected(Exception):
     """The planner produced no plan with valid citations within PLANNER_ATTEMPTS."""
 
@@ -137,7 +149,14 @@ class Researcher:
         messages = loop.messages + [
             {"role": "user", "content": "List every fact you gathered as findings, one per source you consulted."}
         ]
-        response = llm.complete(messages, schema=FINDINGS_SCHEMA)
+        parsed = None
+        for _ in range(2):
+            response = llm.complete(messages, schema=FINDINGS_SCHEMA)
+            parsed = parse_json_object(response.content)
+            if parsed is not None:
+                break
+        if parsed is None:
+            raise MalformedOutput(f"findings did not parse after 2 attempts: {response.content!r:.200}")
         task_id = inputs["task_id"]
         return [
             Finding(
@@ -149,7 +168,7 @@ class Researcher:
                 tool_reads=loop.action_ids,
                 content={"text": item["content"]},
             )
-            for i, item in enumerate(json.loads(response.content or "{}").get("findings", []))
+            for i, item in enumerate(parsed.get("findings", []))
         ]
 
 
@@ -166,8 +185,8 @@ class Planner:
         ]
         for attempt in range(PLANNER_ATTEMPTS):
             response = llm.complete(messages, schema=PLAN_SCHEMA)
-            steps = json.loads(response.content or "{}").get("steps", [])
-            bad = [s for s in steps if not s["cites"] or not set(s["cites"]) <= valid_ids]
+            steps = (parse_json_object(response.content) or {}).get("steps", [])
+            bad = [s for s in steps if not s.get("cites") or not set(s["cites"]) <= valid_ids]
             if steps and not bad:
                 task_id = inputs["task_id"]
                 return [

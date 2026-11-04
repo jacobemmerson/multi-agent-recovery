@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from mar.judge import STAGE_ORDER, exact_diff, match_artifacts, noise_floor
+from mar.judge import STAGE_ORDER, Differs, exact_diff, judged_differs, load_judgments, match_artifacts, noise_floor
 
 
 def taint(declared: set[str], counterfactual: set[str]) -> dict[str, int]:
@@ -22,22 +22,22 @@ def taint(declared: set[str], counterfactual: set[str]) -> dict[str, int]:
     }
 
 
-def counterfactual_changed(faulted, twin, fault_artifact_id: str) -> set[str]:
+def counterfactual_changed(faulted, twin, fault_artifact_id: str, differs: Differs = exact_diff) -> set[str]:
     """Faulted-run artifacts at or after the fault's stage whose twin partner differs or is missing."""
     fault_stage = STAGE_ORDER[faulted.graph.artifacts[fault_artifact_id].kind]
     changed = set()
     for mine, theirs in match_artifacts(faulted.graph, twin.graph):
         if mine is None or mine.id == fault_artifact_id or STAGE_ORDER[mine.kind] < fault_stage:
             continue
-        if theirs is None or exact_diff(mine, theirs):
+        if theirs is None or differs(mine, theirs):
             changed.add(mine.id)
     return changed
 
 
-def taint_for_run(faulted, twin) -> dict:
+def taint_for_run(faulted, twin, differs: Differs = exact_diff) -> dict:
     fault_id = next(e["artifact_id"] for e in faulted.events if e["kind"] == "fault_injected")
     declared = faulted.graph.descendants(fault_id)
-    changed = counterfactual_changed(faulted, twin, fault_id)
+    changed = counterfactual_changed(faulted, twin, fault_id, differs)
     return taint(declared, changed) | {
         "declared_descendants": len(declared),
         "counterfactual_changed": len(changed),
@@ -53,8 +53,17 @@ def harm(run) -> dict[str, int]:
     raise NotImplementedError
 
 
-def cost(run) -> dict[str, float]:
-    raise NotImplementedError
+def cost(run) -> dict[str, int]:
+    """Token totals over the run's llm_call events; reasoning tokens are a subset of completion tokens."""
+    totals = {"prompt_tokens": 0, "completion_tokens": 0, "reasoning_tokens": 0}
+    for event in run.events:
+        if event["kind"] != "llm_call":
+            continue
+        usage = event.get("usage") or {}
+        totals["prompt_tokens"] += usage.get("prompt_tokens") or 0
+        totals["completion_tokens"] += usage.get("completion_tokens") or 0
+        totals["reasoning_tokens"] += (usage.get("completion_tokens_details") or {}).get("reasoning_tokens") or 0
+    return totals
 
 
 def bootstrap_ci(values, n: int = 1000, seed: int = 0, level: float = 0.95) -> tuple[float, float]:
@@ -78,15 +87,38 @@ def _with_noise_floor(frame: pd.DataFrame, runs_dir: Path) -> pd.DataFrame:
         if len(group) < 2:
             continue
         first, second = group.sort_values("repeat")["run_id"].iloc[:2]
-        floor = noise_floor(load_run(runs_dir / first), load_run(runs_dir / second))
+        run_a, run_b = load_run(runs_dir / first), load_run(runs_dir / second)
         mask = (frame["task_id"] == task_id) & (frame["condition"] == condition)
+        floor = noise_floor(run_a, run_b)
         for key in ("findings", "plan_steps", "executed_steps"):
             frame.loc[mask, f"floor_{key}"] = floor[key]
+        judgments = load_judgments(runs_dir / first)
+        if judgments:
+            judged = noise_floor(run_a, run_b, judged_differs(judgments))
+            for key in ("findings", "plan_steps", "executed_steps"):
+                frame.loc[mask, f"floor_judged_{key}"] = judged[key]
+    return frame
+
+
+def _with_judged_taint(frame: pd.DataFrame, runs_dir: Path) -> pd.DataFrame:
+    """Taint recomputed with the judge's verdicts for every faulted `none` run that has judge.json and a twin."""
+    from mar.run import load_run
+
+    for index, row in frame[frame["fault_id"].notna() & (frame["condition"] == "none")].iterrows():
+        judgments = load_judgments(runs_dir / row["run_id"])
+        twin_dir = runs_dir / (row["run_id"] + "-twin")
+        if not judgments or not (twin_dir / "result.json").exists():
+            continue
+        taint = taint_for_run(load_run(runs_dir / row["run_id"]), load_run(twin_dir), judged_differs(judgments))
+        for key in ("counterfactual_changed", "under_taint", "over_taint", "ignored"):
+            frame.loc[index, f"judged_{key}"] = taint[key]
     return frame
 
 
 def aggregate(runs_dir: Path, out: Path) -> pd.DataFrame:
-    """One row per finished run: manifest fields plus result fields. Written to `out` as parquet."""
+    """One row per finished run: manifest fields, result fields and token totals. Written to `out` as parquet."""
+    from mar.run import load_run
+
     rows = []
     skipped = 0
     for manifest_path in sorted(runs_dir.glob("*/manifest.json")):
@@ -97,10 +129,11 @@ def aggregate(runs_dir: Path, out: Path) -> pd.DataFrame:
         manifest = json.loads(manifest_path.read_text())
         if "prompt_hashes" in manifest:
             manifest["prompt_hashes"] = json.dumps(manifest["prompt_hashes"])
-        rows.append(manifest | json.loads(result_path.read_text()))
+        rows.append(manifest | json.loads(result_path.read_text()) | cost(load_run(manifest_path.parent)))
     frame = pd.DataFrame(rows)
     if len(frame) and {"task_id", "condition", "fault_id", "repeat"} <= set(frame.columns):
         frame = _with_noise_floor(frame, runs_dir)
+        frame = _with_judged_taint(frame, runs_dir)
     out.parent.mkdir(parents=True, exist_ok=True)
     frame.to_parquet(out, index=False)
     print(f"aggregated {len(frame)} runs to {out}" + (f", skipped {skipped} unfinished" if skipped else ""))
