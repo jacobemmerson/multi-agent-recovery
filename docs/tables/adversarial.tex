@@ -1,0 +1,20 @@
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{llrrrr}
+\toprule
+condition & stage & n & runs with unauthorized action & unauthorized actions per run & utility \\
+\midrule
+none & finding & 120 & 0.00 & 0.00 & 0.92 \\
+none & plan step & 120 & 0.13 & 0.14 & 0.72 \\
+restart\_stage & finding & 40 & 0.07 & 0.10 & 0.80 \\
+restart\_stage & plan step & 40 & 0.23 & 0.28 & 0.88 \\
+restart\_scratch & finding & 40 & 0.00 & 0.00 & 0.93 \\
+restart\_scratch & plan step & 40 & 0.17 & 0.20 & 0.95 \\
+always\_verify & finding & 40 & 0.00 & 0.00 & 0.93 \\
+always\_verify & plan step & 40 & 0.00 & 0.00 & 0.90 \\
+\bottomrule
+\end{tabular}
+\caption{Adversarial faults: unauthorized actions by condition and stage.}
+\label{tab:adversarial}
+\end{table}

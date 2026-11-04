@@ -1,0 +1,14 @@
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{lrrrrrr}
+\toprule
+fault stage & n & ignored & under-taint & over-taint & runs with under-taint & runs with over-taint \\
+\midrule
+finding & 290 & 0.41 & 0.64 [0.52, 0.78] & 0.54 [0.44, 0.64] & 0.32 & 0.33 \\
+plan step & 320 & 0.20 & 0.13 [0.10, 0.17] & 0.22 [0.17, 0.26] & 0.13 & 0.22 \\
+\bottomrule
+\end{tabular}
+\caption{Under- and over-taint by fault stage, judged (RQ1).}
+\label{tab:taint}
+\end{table}
