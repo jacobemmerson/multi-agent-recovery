@@ -201,7 +201,10 @@ declared descendant set (citations) is therefore wrong in about half the runs wh
 propagated, in both directions.
 
 `data/judge_sample_phase1.csv`: 50 LLM-judged pairs (21 judged different, 29 same; 35 executed
-steps, 13 plan steps, 2 findings), `hand_differs` empty, for the agreement check.
+steps, 13 plan steps, 2 findings), hand-labelled 2026-11-03. Agreement 0.86 (43/50), Cohen's kappa
+0.71. Of the 7 disagreements the judge reported a difference the labeller did not in 5 and missed one
+in 2; 6 of 7 are executed steps (agreement 0.83 there, 0.92 on plan steps). The judge therefore
+over-reports change, which inflates propagation and under-taint and makes the ignored rate a floor.
 
 ## Frozen fault templates (2026-10-21)
 
