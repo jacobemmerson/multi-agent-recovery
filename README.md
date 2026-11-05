@@ -3,9 +3,8 @@
 Provenance-gated recovery in multi-agent LLM workflows (CSE 291A). A researcher, planner and executor
 pipeline runs AgentDojo workspace tasks; one artifact per run is corrupted at a stage boundary, a
 counterfactual twin shows what the fault changed, and recovery baselines are measured on utility, cost
-and residual side effects. Proposal: [docs/proposal.md](docs/proposal.md). Design log and every
-measured number: [docs/design.md](docs/design.md). Headline tables: [docs/phase1_tables.md](docs/phase1_tables.md), LaTeX in `docs/tables/`.
-The Phase 1 writeup (ICLR format) is built locally in `docs/paper/` with `latexmk -pdf phase1.tex` and is gitignored for now.
+and residual side effects. Headline tables: [docs/phase1_tables.md](docs/phase1_tables.md), LaTeX in `docs/tables/`.
+The proposal, design log, plans and the Phase 1 writeup live in `docs/` locally and are gitignored for now.
 
 ## Setup
 
@@ -99,6 +98,6 @@ Brackets are 95% bootstrap intervals; full tables in [docs/phase1_tables.md](doc
 - `configs/` task splits and the Phase 1 / Phase 2 experiment grids
 - `data/fault_templates/` frozen fault templates (hashed into every run manifest)
 - `data/judge_sample_phase1.csv` hand-labeled judge sample
-- `docs/` proposal, design log, headline tables (`phase1_tables.md`, `tables/`), figures (`*.png`, `pipeline.drawio`) and the plans under `docs/plans/`
+- `docs/` headline tables (`phase1_tables.md`, `tables/`) and figures (`*.png`, `pipeline.drawio`); proposal, design log, plans and writeup are local only
 - `scripts/` `plots.py` (per-run plots), `findings_figure.py`, `distance_figure.py`, `pipeline_figure.py` (README and paper figures, sharing `figure_style.py`), `latex_tables.py`, `adapt_tamas.py`
-- `runs/`, `figures/`, `docs/paper/` run directories, per-run plots and the writeup (gitignored)
+- `runs/`, `figures/` run directories and per-run plots (gitignored)

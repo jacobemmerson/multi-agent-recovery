@@ -5,7 +5,10 @@ figures/
 __pycache__/
 .pytest_cache/
 .venv/
-# Phase 1 writeup, kept out of the repo for now; docs/*.pdf are its vector copies of the README figures
+# Kept out of the repo for now: the writeup, the proposal, the design log and plans. Results and figures stay.
 docs/paper/
+docs/proposal.md
+docs/design.md
+docs/plans/
 docs/*.pdf
 .DS_Store
