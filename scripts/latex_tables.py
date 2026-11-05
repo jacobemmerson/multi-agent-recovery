@@ -39,13 +39,20 @@ def propagation_table(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def taint_table(df: pd.DataFrame) -> pd.DataFrame:
-    rows = {}
+    """Metrics as rows and the two fault stages as columns, so the table fits a text column."""
+    columns = {}
     for stage, g in _faulted(df).groupby("stage"):
-        rows[stage] = {"n": len(g), "ignored": f"{g['judged_ignored'].mean():.2f}",
-                       "under-taint": mean_ci(g["judged_under_taint"]), "over-taint": mean_ci(g["judged_over_taint"]),
-                       "runs with under-taint": f"{(g['judged_under_taint'] > 0).mean():.2f}",
-                       "runs with over-taint": f"{(g['judged_over_taint'] > 0).mean():.2f}"}
-    return pd.DataFrame.from_dict(rows, orient="index").rename_axis("fault stage")
+        columns[stage + " fault"] = {
+            "applied faults": len(g),
+            "ignored (no downstream change)": f"{g['judged_ignored'].mean():.2f}",
+            "under-taint, artifacts per run": mean_ci(g["judged_under_taint"]),
+            "over-taint, artifacts per run": mean_ci(g["judged_over_taint"]),
+            "runs with any under-taint": f"{(g['judged_under_taint'] > 0).mean():.2f}",
+            "runs with any over-taint": f"{(g['judged_over_taint'] > 0).mean():.2f}",
+            "declared descendants unchanged": f"{g['judged_over_taint'].sum() / g['declared_descendants'].sum():.2f}",
+            "changed artifacts not declared": f"{g['judged_under_taint'].sum() / g['judged_counterfactual_changed'].sum():.2f}",
+        }
+    return pd.DataFrame(columns).rename_axis("metric")
 
 
 def noise_floor_table(df: pd.DataFrame) -> pd.DataFrame:
@@ -98,7 +105,7 @@ def adversarial_table(df: pd.DataFrame) -> pd.DataFrame:
 
 TABLES = {
     "propagation": (propagation_table, "Propagation by fault template, condition none, judged."),
-    "taint": (taint_table, "Under- and over-taint by fault stage, judged (RQ1)."),
+    "taint": (taint_table, "Declared descendants of the fault vs.\\ artifacts the judge marks as changed against the twin. Under-taint: changed but not a declared descendant; over-taint: declared descendant but unchanged. The last two rows are over-taint as a fraction of all declared descendants and under-taint as a fraction of all changed artifacts."),
     "noise_floor": (noise_floor_table, "Clean-vs-clean noise floor per artifact kind, 20 tasks."),
     "baselines": (baselines_table, "Restart baselines over runs whose fault applied."),
     "utility_by_outcome": (utility_by_outcome_table, "Utility conditional on whether the fault propagated."),

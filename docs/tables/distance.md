@@ -1,0 +1,7 @@
+| fault | artifacts | cited | n | uncited | n  | floor |
+|---|---|---|---|---|---|---|
+| finding | plan steps, 1 hop | 0.63 [0.57, 0.69] | 212 | 0.34 [0.28, 0.39] | 292 | 0.26 |
+| finding | executed steps, 2 hops | 0.63 [0.57, 0.69] | 212 | 0.29 [0.25, 0.35] | 292 | 0.24 |
+| plan step | executed steps, 1 hop | 0.78 [0.74, 0.83] | 320 | 0.13 [0.10, 0.17] | 323 | 0.24 |
+| finding | executed steps, plan step changed | 0.81 [0.74, 0.88] | 133 | 0.69 [0.60, 0.78] | 99 | 0.24 |
+| finding | executed steps, plan step unchanged | 0.32 [0.22, 0.42] | 79 | 0.09 [0.06, 0.14] | 193 | 0.24 |

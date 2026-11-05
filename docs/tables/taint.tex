@@ -1,14 +1,20 @@
 \begin{table}[t]
 \centering
 \small
-\begin{tabular}{lrrrrrr}
+\begin{tabular}{lrr}
 \toprule
-fault stage & n & ignored & under-taint & over-taint & runs with under-taint & runs with over-taint \\
+metric & finding fault & plan step fault \\
 \midrule
-finding & 290 & 0.41 & 0.64 [0.52, 0.78] & 0.54 [0.44, 0.64] & 0.32 & 0.33 \\
-plan step & 320 & 0.20 & 0.13 [0.10, 0.17] & 0.22 [0.17, 0.26] & 0.13 & 0.22 \\
+applied faults & 290 & 320 \\
+ignored (no downstream change) & 0.41 & 0.20 \\
+under-taint, artifacts per run & 0.64 [0.52, 0.78] & 0.13 [0.10, 0.17] \\
+over-taint, artifacts per run & 0.54 [0.44, 0.64] & 0.22 [0.17, 0.26] \\
+runs with any under-taint & 0.32 & 0.13 \\
+runs with any over-taint & 0.33 & 0.22 \\
+declared descendants unchanged & 0.37 & 0.22 \\
+changed artifacts not declared & 0.41 & 0.15 \\
 \bottomrule
 \end{tabular}
-\caption{Under- and over-taint by fault stage, judged (RQ1).}
+\caption{Declared descendants of the fault vs.\ artifacts the judge marks as changed against the twin. Under-taint: changed but not a declared descendant; over-taint: declared descendant but unchanged. The last two rows are over-taint as a fraction of all declared descendants and under-taint as a fraction of all changed artifacts.}
 \label{tab:taint}
 \end{table}
