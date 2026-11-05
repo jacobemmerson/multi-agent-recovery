@@ -154,7 +154,7 @@ fresh samples. One restart_scratch run on task 11 ended in `PlanRejected` after 
 resume reran it and it passed. The final set has 0 error results.
 
 **Exact-diff columns are still uninformative at scale.** Clean-vs-clean floor by exact diff is
-0.97 / 0.99 / 1.00 (findings / plan steps / executed steps) and exact `ignored` is 0.7% of 610
+0.97 / 0.93 / 1.00 (findings / plan steps / executed steps) and exact `ignored` is 0.7% of 610
 applied faults with twins. The judged columns are the ones to read.
 
 **Cost and utility over runs whose fault applied** (means; `none` is the unrecovered pipeline):
