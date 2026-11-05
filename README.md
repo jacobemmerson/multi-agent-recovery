@@ -5,13 +5,14 @@ pipeline runs AgentDojo workspace tasks; one artifact per run is corrupted at a 
 counterfactual twin shows what the fault changed, and recovery baselines are measured on utility, cost
 and residual side effects. Proposal: [docs/proposal.md](docs/proposal.md). Design log and every
 measured number: [docs/design.md](docs/design.md). Headline tables: [docs/phase1_tables.md](docs/phase1_tables.md), LaTeX in `docs/tables/`.
+The Phase 1 writeup (ICLR format) is built locally in `docs/paper/` with `latexmk -pdf phase1.tex` and is gitignored for now.
 
 ## Setup
 
 ```sh
 cp .env.example .env        # BASE_URL (OpenAI-compatible endpoint), TRITONAI_API_KEY
 uv sync
-uv run pytest -q            # 104 tests, no network
+uv run pytest -q            # 109 tests, no network
 ```
 
 Models are served by TritonAI (vLLM, OpenAI-compatible). Agents run on `api-glm-5.3-flash`
@@ -24,8 +25,9 @@ uv run mar run configs/phase1.yaml --tasks dev --resume --runs-dir runs/phase1_f
 uv run mar judge --runs-dir runs/phase1_flash --model api-glm-5.3 --workers 4
 uv run mar aggregate --runs-dir runs/phase1_flash --out runs/phase1_flash/aggregate.parquet
 uv run python scripts/plots.py runs/phase1_flash/aggregate.parquet figures/phase1_flash
-uv run python scripts/findings_figure.py runs/phase1_flash/aggregate.parquet docs/findings.png
-uv run python scripts/pipeline_figure.py docs/pipeline.png
+uv run python scripts/findings_figure.py runs/phase1_flash/aggregate.parquet docs/findings.png  # + findings_baselines.png, PDFs
+uv run python scripts/distance_figure.py runs/phase1_flash docs/distance.png                   # + docs/tables/distance.{tex,md}
+uv run python scripts/pipeline_figure.py docs/pipeline.png                                      # hand-editable copy: docs/pipeline.drawio
 uv run python scripts/latex_tables.py runs/phase1_flash/aggregate.parquet docs/tables
 ```
 
@@ -63,6 +65,8 @@ Brackets are 95% bootstrap intervals; full tables in [docs/phase1_tables.md](doc
 
 ![findings](docs/findings.png)
 
+![baselines](docs/findings_baselines.png)
+
 - Judge required. Exact diff gives a noise floor of 0.97 to 1.00 and an ignored rate of 0.7%. The
   judge gives floors of 0.56 (findings), 0.26 (plan steps), 0.24 (executed steps) and an ignored
   rate of 30%. Judge agreement with 50 hand labels is 0.86, kappa 0.71; the judge over-reports
@@ -72,10 +76,15 @@ Brackets are 95% bootstrap intervals; full tables in [docs/phase1_tables.md](doc
   ignored and 0.64 when it propagates.
 - Utility is blind to adversarial faults. Injected instructions add to the task rather than replace
   it, so utility stays at clean levels (0.92) while 13% of adversarial plan-step runs leak data to
-  the attacker address. Accidental and stale faults replace content and cut utility (stale plan
-  step: 0.18).
-- Citations are a poor taint set. Finding faults average 0.64 under-taint and 0.54 over-taint
-  artifacts per run; a third of finding-fault runs have each. Plan-step faults: 0.13 and 0.22.
+  the attacker address. Accidental and stale faults replace content and cut utility (do-nothing and
+  stale plan steps: 0.18).
+- Citations over-taint; under-taint is mostly noise. Finding faults average 0.64 under-taint and
+  0.54 over-taint artifacts per run; a third of finding-fault runs have each. Plan-step faults: 0.13
+  and 0.22. 37% (finding) and 22% (plan step) of declared descendants did not change. By distance
+  (`docs/distance.png`, `docs/tables/distance.md`): cited artifacts change at 0.63 one hop and 0.63 two
+  hops from a corrupted finding, so a propagated fault does not fade; uncited artifacts change at 0.29
+  to 0.34 against a clean-vs-clean floor of 0.24 to 0.26. An artifact with no twin at the same
+  position counts as changed throughout, as in the floor.
 - Restarts recover utility and double side effects. Restart utility is 0.89 to 0.94 [0.84, 0.97],
   the clean level, at 1.4 to 2 times the LLM calls, with irreversible actions per run at 0.60 to
   0.63 against 0.31 for `none`: the first attempt's emails are already sent when the oracle fires,
@@ -90,6 +99,6 @@ Brackets are 95% bootstrap intervals; full tables in [docs/phase1_tables.md](doc
 - `configs/` task splits and the Phase 1 / Phase 2 experiment grids
 - `data/fault_templates/` frozen fault templates (hashed into every run manifest)
 - `data/judge_sample_phase1.csv` hand-labeled judge sample
-- `docs/` proposal, design log, tables, figures and the plans under `docs/plans/`
-- `scripts/` plots, figure generators, TAMAS adaptation
-- `runs/`, `figures/` run directories and per-run plots (gitignored)
+- `docs/` proposal, design log, headline tables (`phase1_tables.md`, `tables/`), figures (`*.png`, `pipeline.drawio`) and the plans under `docs/plans/`
+- `scripts/` `plots.py` (per-run plots), `findings_figure.py`, `distance_figure.py`, `pipeline_figure.py` (README and paper figures, sharing `figure_style.py`), `latex_tables.py`, `adapt_tamas.py`
+- `runs/`, `figures/`, `docs/paper/` run directories, per-run plots and the writeup (gitignored)
